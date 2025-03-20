@@ -1,5 +1,5 @@
 {
-  "name": "Midscene.js",
+  "name": "Midscene.jszz",
   "description": "Open-source SDK for automating web pages using natural language through AI.",
   "version": "0.38",
   "manifest_version": 3,
@@ -7,12 +7,25 @@
     "activeTab",
     "tabs",
     "sidePanel",
-    "debugger"
+    "debugger",
+    "storage"
   ],
   "incognito": "split",
   "background": {
     "service_worker": "./lib/worker.js"
   },
+  "content_scripts": [
+    {
+      "js": [
+        "./lib/browser-polyfill.js",
+        "./lib/content.js"
+      ],
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "match_about_blank": true,
+      "all_frames": true
+    }
+  ],
   "host_permissions": [
     "<all_urls>"
   ],
