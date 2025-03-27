@@ -1,5 +1,5 @@
 {
-  "name": "Midscene.jszz",
+  "name": "Fortress_zz",
   "description": "Open-source SDK for automating web pages using natural language through AI.",
   "version": "0.38",
   "manifest_version": 3,
@@ -31,7 +31,7 @@
   ],
   "action": {
     "default_icon": "icon128.png",
-    "default_title": "Midscene.js"
+    "default_title": "Fortress_zz"
   },
   "side_panel": {
     "default_path": "./pages/sidepanel.html"

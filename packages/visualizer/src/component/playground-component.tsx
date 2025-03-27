@@ -40,7 +40,6 @@ import {
 } from '@midscene/web/chrome-extension';
 import { buildYaml } from '@midscene/web/yaml';
 import ButtonGroup from 'antd/es/button/button-group';
-
 interface PlaygroundResult {
   result: any;
   dump: GroupedActionDump | null;
@@ -167,6 +166,7 @@ export function Playground({
   hideLogo,
   showContextPreview = true,
   dryMode = false,
+  yamlMode = false,
 }: {
   getAgent: (
     forceSameTabNavigation?: boolean,
@@ -174,6 +174,7 @@ export function Playground({
   hideLogo?: boolean;
   showContextPreview?: boolean;
   dryMode?: boolean;
+  yamlMode?: boolean;
 }) {
   const [uiContextPreview, setUiContextPreview] = useState<
     UIContext | undefined
@@ -207,6 +208,15 @@ export function Playground({
       setVerticalMode(window.innerWidth < sizeThreshold);
     };
     window.addEventListener('resize', handleResize);
+
+    chrome.runtime.onMessage.addListener(
+      function (message, sender, sendResponse) {
+        const { type, data } = message;
+        if (type === 'fortress:excuteAINode') {
+          handleRunYaml(data.node.data.formData.ai);
+        }
+      },
+    );
     return () => {
       window.removeEventListener('resize', handleResize);
     };
@@ -282,13 +292,17 @@ export function Playground({
   const currentRunningIdRef = useRef<number | null>(0);
   const interruptedFlagRef = useRef<Record<number, boolean>>({});
   const handleRun = useCallback(
-    async (stepIndex: number) => {
+    async (stepIndex: number, isYamlMode = false, yamlContent?: string) => {
       const _value = form.getFieldsValue();
+      if (isYamlMode) {
+        _value[`type-0`] = 'aiYaml';
+        _value[`prompt-0`] = yamlContent || '';
+      }
+
       const value = {
         type: _value[`type-${stepIndex}`],
         prompt: _value[`prompt-${stepIndex}`],
       };
-      console.log('step', stepIndex, 'value', value);
 
       if (!value.prompt) {
         return false;
@@ -334,20 +348,6 @@ export function Playground({
           );
         } else {
           if (value.type === 'aiAction') {
-            // const yamlString = buildYaml(
-            //   {
-            //     url: tabUrl || '',
-            //   },
-            //   [
-            //     {
-            //       name: 'aiAction',
-            //       flow: [{ aiAction: value.prompt }],
-            //     },
-            //   ],
-            // );
-            // const parsedYamlScript = parseYamlScript(yamlString);
-            // console.log('yamlString', parsedYamlScript, yamlString);
-
             result.result = await activeAgent?.aiAction(value.prompt);
           } else if (value.type === 'aiQuery') {
             result.result = await activeAgent?.aiQuery(value.prompt);
@@ -359,6 +359,9 @@ export function Playground({
                 keepRawResponse: true,
               },
             );
+          } else if (value.type === 'aiYaml') {
+            let res = await activeAgent?.runYaml(value.prompt);
+            result.result = res.result;
           }
         }
       } catch (e: any) {
@@ -409,7 +412,10 @@ export function Playground({
         newResult[stepIndex] = result;
         return newResult;
       });
-      if (value.type === 'aiAction' && result?.dump) {
+      if (
+        (value.type === 'aiAction' || value.type === 'aiYaml') &&
+        result?.dump
+      ) {
         const info = allScriptsFromDump(result.dump);
         setReplayScriptsInfo(info);
         setReplayCounter((c) => c + 1);
@@ -417,14 +423,13 @@ export function Playground({
         setReplayScriptsInfo(null);
       }
       console.log(`time taken: ${Date.now() - startTime}ms`);
-
-      // Scroll the Run header into view
-      // setTimeout(() => {
-      //   runResultRef.current?.scrollIntoView({ behavior: 'smooth' });
-      // }, 50);
     },
     [form, getAgent, serviceMode, serverValid, forceSameTabNavigation],
   );
+
+  const handleRunYaml = async (yamlString: string) => {
+    handleRun(0, true, yamlString);
+  };
 
   const handleRunFromStep = async (stepIndex: number) => {
     setLoading(true);
@@ -572,7 +577,7 @@ export function Playground({
         Run.
       </Button>
     );
-  };
+  }
 
   const historySelector = useHistorySelector((historyItem) => {
     form.setFieldsValue({
@@ -647,6 +652,7 @@ export function Playground({
     >
       <div className="playground-form-container">
         <div className="form-part">
+          {/* zz token配置 */}
           <h3>
             {serviceMode === 'Server'
               ? 'Server Status'
@@ -654,6 +660,7 @@ export function Playground({
           </h3>
           {statusContent}
           <div className="switch-btn-wrapper">{switchBtn}</div>
+          {/* zz token配置 */}
         </div>
         <div
           className="form-part context-panel"
@@ -686,57 +693,73 @@ export function Playground({
           )}
         </div>
         <div className="form-part input-wrapper">
-          <h3>Run Steps</h3>
-          {new Array(stepCount).fill(1).map((_, i) => {
-            return (
-              <Input.Group
-                compact
-                className={
-                  result[i]?.error ? 'fail' : curStep === i ? 'active' : ''
-                }
-                key={i.toString()}
-              >
-                <Form.Item name={`type-${i}`} initialValue={'aiAction'} noStyle>
-                  <Select>
-                    <Select.Option value="aiAction">
-                      {actionNameForType('aiAction')}
-                    </Select.Option>
-                    <Select.Option value="aiQuery">
-                      {actionNameForType('aiQuery')}
-                    </Select.Option>
-                    <Select.Option value="aiAssert">
-                      {actionNameForType('aiAssert')}
-                    </Select.Option>
-                  </Select>
-                </Form.Item>
-                <Form.Item name={`prompt-${i}`} noStyle>
-                  <Input
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.metaKey) {
-                        handleRunFromStep(i);
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }
-                    }}
-                    onFocus={() => {
-                      if (!loading) {
-                        setCurStep(i);
-                        const dump = result[i]?.dump;
-                        if (dump) {
-                          const info = allScriptsFromDump(dump);
-                          setReplayScriptsInfo(info);
-                        } else {
-                          setReplayScriptsInfo(null);
+          {/* zz 步骤step*/}
+          {/* <h3>Run Steps</h3>
+          {yamlMode ? (
+            <>
+              <Button icon={<BorderOutlined />} onClick={handleRunYaml}>
+                run yaml
+              </Button>
+            </>
+          ) : (
+            new Array(stepCount).fill(1).map((_, i) => {
+              return (
+                <Input.Group
+                  compact
+                  className={
+                    result[i]?.error ? 'fail' : curStep === i ? 'active' : ''
+                  }
+                  key={i.toString()}
+                >
+                  <Form.Item
+                    name={`type-${i}`}
+                    initialValue={'aiAction'}
+                    noStyle
+                  >
+                    <Select>
+                      <Select.Option value="aiAction">
+                        {actionNameForType('aiAction')}
+                      </Select.Option>
+                      <Select.Option value="aiQuery">
+                        {actionNameForType('aiQuery')}
+                      </Select.Option>
+                      <Select.Option value="aiAssert">
+                        {actionNameForType('aiAssert')}
+                      </Select.Option>
+                    </Select>
+                  </Form.Item>
+                  <Form.Item name={`prompt-${i}`} noStyle>
+                    <Input
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.metaKey) {
+                          handleRunFromStep(i);
+                          e.preventDefault();
+                          e.stopPropagation();
                         }
-                      }
-                    }}
-                  />
-                </Form.Item>
-                {curStep === i ? renderActionBtn(i) : null}
-              </Input.Group>
-            );
-          })}
-          <div className="form-controller-wrapper">
+                      }}
+                      onFocus={() => {
+                        if (!loading) {
+                          setCurStep(i);
+                          const dump = result[i]?.dump;
+                          if (dump) {
+                            const info = allScriptsFromDump(dump);
+                            setReplayScriptsInfo(info);
+                          } else {
+                            setReplayScriptsInfo(null);
+                          }
+                        }
+                      }}
+                    />
+                  </Form.Item>
+                  {curStep === i ? renderActionBtn(i) : null}
+                </Input.Group>
+              );
+            })
+          )} */}
+          {/* zz 步骤step*/}
+
+          {/* zz 步骤操作 */}
+          {/* <div className="form-controller-wrapper">
             <Tooltip title="aiAction report use a lot of memory, suggest step count less than 5">
               <Button
                 type="primary"
@@ -763,7 +786,8 @@ export function Playground({
           >
             {historySelector}
             {configSelector}
-          </div>
+          </div> */}
+          {/* zz 步骤操作 */}
         </div>
       </div>
     </Form>

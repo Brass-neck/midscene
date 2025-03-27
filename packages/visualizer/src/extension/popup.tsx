@@ -26,11 +26,12 @@ function PlaygroundPopup() {
   const items = [
     {
       key: 'playground',
-      label: 'Playground',
+      label: 'Workbench',
       icon: <SendOutlined />,
       children: (
         <div className="popup-playground-container">
           <Playground
+            yamlMode={false}
             hideLogo
             getAgent={(forceSameTabNavigation?: boolean) => {
               return extensionAgentForTab(forceSameTabNavigation);
@@ -40,30 +41,30 @@ function PlaygroundPopup() {
         </div>
       ),
     },
-    {
-      key: 'bridge',
-      label: 'Bridge Mode',
-      children: (
-        <div className="popup-bridge-container">
-          <Bridge />
-        </div>
-      ),
-      icon: <ApiOutlined />,
-    },
+    // {
+    //   key: 'bridge',
+    //   label: 'Bridge Mode',
+    //   children: (
+    //     <div className="popup-bridge-container">
+    //       <Bridge />
+    //     </div>
+    //   ),
+    //   icon: <ApiOutlined />,
+    // },
   ];
 
   return (
     <ConfigProvider theme={globalThemeConfig()}>
       <div className="popup-wrapper">
         <div className="popup-header">
-          <Logo withGithubStar={true} />
+          {/* <Logo withGithubStar={true} />
           <p>
             AI-Driven Browser Automation with Chrome Extensions, JavaScript, and
             YAML Scripts.{' '}
             <a href="https://midscenejs.com/" target="_blank" rel="noreferrer">
               Learn more
             </a>
-          </p>
+          </p> */}
         </div>
         <div className="tabs-container">
           <Tabs
@@ -75,10 +76,11 @@ function PlaygroundPopup() {
         </div>
 
         <div className="popup-footer">
-          <p>
+          {/* todo zz 版本号 */}
+          {/* <p>
             Midscene.js Chrome Extension v{extensionVersion} (SDK v{__VERSION__}
             )
-          </p>
+          </p> */}
         </div>
       </div>
     </ConfigProvider>
