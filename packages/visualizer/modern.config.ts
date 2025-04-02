@@ -58,10 +58,12 @@ export default defineConfig({
         worker: 'src/extension/worker.ts',
         'playground-entry': 'src/extension/playground-entry.tsx',
         'browser-polyfill': 'src/extension/fortress/browser-polyfill.js',
-        'content': 'src/extension/fortress/content.js',
+        content: 'src/extension/fortress/content.js',
       },
       platform: 'browser',
       outDir: '/Users/bytedance/Desktop/fortress/lib',
+      //todo zz 调试完修改
+      // outDir: 'unpacked-extension/lib',
       target: 'es2018',
     },
   ],
