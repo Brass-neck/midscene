@@ -758,11 +758,25 @@ const awaitTime = (time) => {
 
 const defaultMaxFindTimes = (oversea) => (oversea ? 10 : 5);
 const excuteNode = async (node, index, uidl, tabId, extra) => {
+  chrome.runtime.sendMessage(
+    {
+      type: 'fortress:excuteNode',
+      data: {
+        node,
+        tabId,
+      },
+    },
+    function (response) {
+      console.log('fortress:excuteNode received response:', response);
+    },
+  );
+
   const { isOversea, accessPartyName } = extra;
   const {
     data: { formData },
     type,
   } = node;
+
   await new Promise(async (resolve, reject) => {
     try {
       let ele;
@@ -835,12 +849,6 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
                   );
                 }
             }
-            console.log(
-              'debug 切换接入方 ele',
-              ele?.parentElement,
-              ele,
-              formData.accessPartType,
-            );
 
             switch (formData.accessPartType) {
               case 'session_manage':
@@ -879,58 +887,30 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
             excuteRecord.passCaseNum++;
           }
           break;
-        // case NodeType.AccessPart:
-        //   if (formData.accessPartId) {
-        //     ele = await findElement('img[alt="avatar"]');
-        //     if (typeof ele === 'string') {
-        //       excuteRecord.errors.push(ele);
-        //       break;
-        //     } else {
-        //       await simulateEvent(ele, SimulateEventType.CLICK);
-        //     }
-        //
-        //     ele = await findElement('li[role="menuitem"]:first-child');
-        //     if (typeof ele === 'string') {
-        //       excuteRecord.errors.push(ele);
-        //       break;
-        //     } else {
-        //       await simulateEvent(ele, SimulateEventType.MOUSE_DOWN);
-        //     }
-        //
-        //     ele = await findElement(`ul[role="menu"]:first-child li[role="menuitem"]:nth-child(${formData?.accessPartId})`);
-        //     if (typeof ele === 'string') {
-        //       excuteRecord.errors.push(ele);
-        //       break;
-        //     } else {
-        //       await simulateEvent(ele, SimulateEventType.CLICK);
-        //     }
-        //
-        //     await chrome.storage.local.set({ fortressContentLoaded: 0 });
-        //     const startNode = uidl?.nodes?.[0];
-        //     startNode.data.formData.accessPartId = undefined;
-        //     chrome.runtime.sendMessage({ type: 'fortress:openurl', data: {
-        //       ...uidl,
-        //       nodes: [startNode, ...uidl?.nodes?.slice?.(1)],
-        //       tabId
-        //     } });
-        //     excuteRecord.passCaseNum++;
-        //   }
-        //   excuteRecord.passCaseNum++;
-        //   break;
         case NodeType.AINode:
-          chrome.runtime.sendMessage(
-            {
-              type: 'fortress:excuteAINode',
-              data: {
-                node,
-                tabId,
-                excuteRecord,
-              },
+          function sendMessageAsync(message) {
+            return new Promise((resolve, reject) => {
+              chrome.runtime.sendMessage(message, function (response) {
+                if (chrome.runtime.lastError) {
+                  return reject(new Error(chrome.runtime.lastError.message));
+                }
+                console.log('Received response:  ', response);
+                return resolve(response);
+              });
+            });
+          }
+
+          const message = {
+            type: 'fortress:excuteAINode',
+            data: {
+              node,
+              tabId,
+              excuteRecord,
             },
-            function (response) {
-              console.log('Received response:', response);
-            },
-          );
+          };
+          console.log('zz await 前-------------------');
+          await sendMessageAsync(message);
+          console.log('zz await 后-------------------');
           excuteRecord.passCaseNum++;
           break;
         case NodeType.ElementClick:
@@ -970,7 +950,6 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
             defaultMaxFindTimes(isOversea),
             isOversea,
           );
-          console.log('zz ele existing', ele);
 
           if (typeof ele === 'string') {
             excuteRecord.errors.push({ node, errorMsg: ele });
@@ -986,19 +965,6 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
             }, formData.delayDuration * 1000);
           });
           break;
-        // case NodeType.Keyboard:
-        //   try {
-        //     excuteRecord.passCaseNum++;
-        //     ele = await findElement('.united_qc-input');
-        //     await pressKey({
-        //       ele,
-        //       keys: [formData.keyboard],
-        //     })
-        //   } catch (e) {
-        //     console.error(e);
-        //     excuteRecord.errors.push({ node, errorMsg: `键盘事件${formData.keyboard}触发失败` });
-        //   }
-        //   break;
         case NodeType.JumpUrl:
           excuteRecord.passCaseNum++;
           await chrome.storage.local.set({ fortressContentLoaded: 0 });
@@ -1087,6 +1053,7 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           break;
         default:
       }
+      console.log('zz switch结束了-------------');
       resolve();
     } catch (e) {
       console.error('debug error', e.stack);
@@ -1151,15 +1118,11 @@ if (isInFortress()) {
     } = event.data;
     const { edges, nodes } = uidl;
 
-    console.log(
-      'zz midscene content.js 插件 接收preview: ',
-      event,
-      uidl,
-      variableInfo,
-      extra,
-    );
-    console.log('zz chrome.runtime?.id', chrome.runtime?.id);
     if (chrome.runtime?.id) {
+      chrome.runtime.sendMessage({
+        type: 'fortress:initConfig',
+        data: getUidlByVariableInfo(uidl, variableInfo, extra),
+      });
       chrome.runtime.sendMessage({
         type: 'fortress:openurl',
         data: getUidlByVariableInfo(uidl, variableInfo, extra),
@@ -1178,7 +1141,6 @@ console.log('debug load contentjs');
   curPort = chrome.runtime.connect('jflcdlaondhiefginpknleiabkhblnlf', {
     name: 'fortress:connectcontent',
   });
-  console.log('zz contentjs curPort', curPort);
   let cache = await chrome.storage.local.get('fortressContentLoaded');
   if (isInFortress()) {
     await chrome.storage.local.set({ fortressContentLoaded: 0 });
@@ -1187,7 +1149,6 @@ console.log('debug load contentjs');
       fortressContentLoaded: cache?.fortressContentLoaded + 1,
     });
   }
-  console.log('zz cache.fortressContentLoaded', cache.fortressContentLoaded);
   if (cache.fortressContentLoaded > 0) {
     return;
   }
@@ -1205,7 +1166,7 @@ console.log('debug load contentjs');
       } = event.data;
 
       console.log(
-        'zz midscene content.js debug 接收消息: ',
+        'content.js debug 接收消息: ',
         event,
         uidl,
         variableInfo,
@@ -1238,14 +1199,12 @@ console.log('debug load contentjs');
         clearStorage();
 
         // 执行用例计划
-        console.log('zz excuteWorkflow before');
         await excuteWorkflow(handleUidl(uidl), tabId, uidl?.extra);
-        console.log('zz excuteWorkflow after');
-        console.log('zz 堡垒 tabId:----------------------------- ', tabId);
 
         await new Promise((resolve) => {
           setTimeout(async () => {
             //todo zz 先不要关闭浏览器，调试用，上线记得放开注释
+            console.log('zz 关闭浏览器');
             // await chrome.runtime.sendMessage({
             //   type: 'fortress:closepreview',
             //   data: excuteRecord,

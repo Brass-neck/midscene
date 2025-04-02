@@ -181,6 +181,7 @@ export function Playground({
   >(undefined);
 
   const [loading, setLoading] = useState(false);
+  const [curStepDesc, setCurStepDesc] = useState('');
   const [loadingProgressText, setLoadingProgressText] = useState('');
   const [stepCount, setStepCount] = useState(5);
   const [curStep, setCurStep] = useState(0);
@@ -188,7 +189,7 @@ export function Playground({
   const [verticalMode, setVerticalMode] = useState(false);
   const { tabUrl } = useChromeTabInfo();
   const [form] = Form.useForm();
-  const { config, serviceMode, setServiceMode } = useEnvConfig();
+  const { config, serviceMode, setServiceMode, loadConfig } = useEnvConfig();
   const forceSameTabNavigation = useEnvConfig(
     (state) => state.forceSameTabNavigation,
   );
@@ -210,10 +211,28 @@ export function Playground({
     window.addEventListener('resize', handleResize);
 
     chrome.runtime.onMessage.addListener(
-      function (message, sender, sendResponse) {
+      async (message, sender, sendResponse) => {
         const { type, data } = message;
         if (type === 'fortress:excuteAINode') {
-          handleRunYaml(data.node.data.formData.ai);
+          try {
+            const result = await handleRunYaml(data.node.data.formData.ai);
+            sendResponse({
+              success: true,
+              result: 'fortress:excuteAINode success!',
+            });
+          } catch (error) {
+            console.error('fortress:excuteAINode error:', error);
+            sendResponse({ success: false, error: error?.toString() });
+          }
+        } else if (type === 'fortress:excuteNode') {
+          setCurStepDesc(data.node.name || '');
+        } else if (type === 'fortress:closeurl') {
+          setCurStepDesc('');
+        } else if (type === 'fortress:initConfig') {
+          const aiNode = data?.nodes?.find(
+            (node: any) => node?.name === '自然语言用例',
+          );
+          loadConfig(aiNode.data.formData.modelConfig.configStr || '');
         }
       },
     );
@@ -428,7 +447,7 @@ export function Playground({
   );
 
   const handleRunYaml = async (yamlString: string) => {
-    handleRun(0, true, yamlString);
+    await handleRun(0, true, yamlString);
   };
 
   const handleRunFromStep = async (stepIndex: number) => {
@@ -653,14 +672,17 @@ export function Playground({
       <div className="playground-form-container">
         <div className="form-part">
           {/* zz token配置 */}
-          <h3>
+          {/* <h3>
             {serviceMode === 'Server'
               ? 'Server Status'
               : 'In-Browser Request Config'}
-          </h3>
-          {statusContent}
+          </h3> */}
+          {/* {statusContent} */}
           <div className="switch-btn-wrapper">{switchBtn}</div>
           {/* zz token配置 */}
+          {/* 堡垒步骤展示 */}
+          <div>正在执行的节点：{curStepDesc.toString()}</div>
+          {/* 堡垒步骤展示 */}
         </div>
         <div
           className="form-part context-panel"
@@ -668,11 +690,13 @@ export function Playground({
         >
           <h3>UI Context</h3>
           {uiContextPreview ? (
-            <Blackboard
-              uiContext={uiContextPreview}
-              hideController
-              disableInteraction
-            />
+            <>
+              <Blackboard
+                uiContext={uiContextPreview}
+                hideController
+                disableInteraction
+              />
+            </>
           ) : (
             <div>
               {iconForStatus('failed')} No UI context
@@ -805,6 +829,7 @@ export function Playground({
     <div className="playground-container vertical-mode">
       {formSection}
       <div className="form-part">
+        <div>AI 报告</div>
         <div className={resultWrapperClassName}>{resultDataToShow}</div>
         <div ref={runResultRef} />
       </div>
