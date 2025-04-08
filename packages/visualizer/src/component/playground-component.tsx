@@ -7,8 +7,19 @@ import {
 } from '@ant-design/icons';
 import type { GroupedActionDump, UIContext } from '@midscene/core';
 import { Helmet } from '@modern-js/runtime/head';
-import { Alert, Button, Checkbox, Select, Spin, Tooltip, message } from 'antd';
-import { Form, Input } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  // Select,
+  Spin,
+  Tooltip,
+  message,
+  Form,
+  Input,
+  Dropdown,
+  Space,
+} from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
@@ -30,7 +41,6 @@ import {
 } from '@midscene/web/playground';
 import type { WebUIContext } from '@midscene/web/utils';
 import type { MenuProps } from 'antd';
-import { Dropdown, Space } from 'antd';
 import { EnvConfig } from './env-config';
 import { type HistoryItem, useChromeTabInfo, useEnvConfig } from './store';
 
@@ -39,7 +49,7 @@ import {
   ChromeExtensionProxyPageAgent,
 } from '@midscene/web/chrome-extension';
 import { buildYaml } from '@midscene/web/yaml';
-import ButtonGroup from 'antd/es/button/button-group';
+// import ButtonGroup from 'antd/es/button/button-group';
 interface PlaygroundResult {
   result: any;
   dump: GroupedActionDump | null;
@@ -63,13 +73,19 @@ const requestPlaygroundServer = async (
 };
 
 const actionNameForType = (type: string) => {
-  if (type === 'aiAction') return 'Action';
-  if (type === 'aiQuery') return 'Query';
-  if (type === 'aiAssert') return 'Assert';
+  if (type === 'aiAction') {
+    return 'Action';
+  }
+  if (type === 'aiQuery') {
+    return 'Query';
+  }
+  if (type === 'aiAssert') {
+    return 'Assert';
+  }
   return type;
 };
 
-const { TextArea } = Input;
+// const { TextArea } = Input;
 
 export const staticAgentFromContext = (context: WebUIContext) => {
   const page = new StaticPage(context);
@@ -80,7 +96,9 @@ export const useStaticPageAgent = (
   context: WebUIContext | undefined | null,
 ): StaticPageAgent | null => {
   const agent = useMemo(() => {
-    if (!context) return null;
+    if (!context) {
+      return null;
+    }
 
     return staticAgentFromContext(context);
   }, [context]);
@@ -215,7 +233,7 @@ export function Playground({
         const { type, data } = message;
         if (type === 'fortress:excuteAINode') {
           try {
-            const result = await handleRunYaml(data.node.data.formData.ai);
+            await handleRunYaml(data.node.data.formData.ai);
             sendResponse({
               success: true,
               result: 'fortress:excuteAINode success!',
@@ -226,7 +244,7 @@ export function Playground({
           }
         } else if (type === 'fortress:excuteNode') {
           setCurStepDesc(data.node.name || '');
-        } else if (type === 'fortress:closeurl') {
+        } else if (type === 'fortress:closepreview') {
           setCurStepDesc('');
         } else if (type === 'fortress:initConfig') {
           const aiNode = data?.nodes?.find(
@@ -234,8 +252,28 @@ export function Playground({
           );
           loadConfig(aiNode.data.formData.modelConfig.configStr || '');
         }
+        return true;
       },
     );
+
+    const port = chrome.runtime.connect('jflcdlaondhiefginpknleiabkhblnlf', {
+      name: 'fortress:sidepanel',
+    });
+    port.onMessage.addListener(async (message) => {
+      const { type, data } = message;
+      if (type === 'fortress:excuteAINode') {
+        try {
+          await handleRunYaml(data.node.data.formData.ai);
+          port.postMessage({ type: 'fortress:excuteAINode', data });
+        } catch (error) {
+          console.error('sidePanel port fortress:excuteAINode error:', error);
+          port.postMessage({
+            message: 'sidePanel port fortress:excuteAINode error',
+          });
+        }
+      }
+    });
+
     return () => {
       window.removeEventListener('resize', handleResize);
     };
@@ -263,8 +301,12 @@ export function Playground({
 
   // setup context preview
   useEffect(() => {
-    if (uiContextPreview) return;
-    if (!showContextPreview) return;
+    if (uiContextPreview) {
+      return;
+    }
+    if (!showContextPreview) {
+      return;
+    }
 
     getAgent(forceSameTabNavigation)
       ?.getUIContext()
@@ -314,8 +356,8 @@ export function Playground({
     async (stepIndex: number, isYamlMode = false, yamlContent?: string) => {
       const _value = form.getFieldsValue();
       if (isYamlMode) {
-        _value[`type-0`] = 'aiYaml';
-        _value[`prompt-0`] = yamlContent || '';
+        _value['type-0'] = 'aiYaml';
+        _value['prompt-0'] = yamlContent || '';
       }
 
       const value = {
@@ -379,7 +421,7 @@ export function Playground({
               },
             );
           } else if (value.type === 'aiYaml') {
-            let res = await activeAgent?.runYaml(value.prompt);
+            const res = await activeAgent?.runYaml(value.prompt);
             result.result = res.result;
           }
         }
@@ -613,12 +655,13 @@ export function Playground({
 
   const history = useEnvConfig((state) => state.history);
   const lastHistory = history[0];
-  const historyInitialValues = useMemo(() => {
-    return {
+  const historyInitialValues = useMemo(
+    () => ({
       type: lastHistory?.type || 'aiAction',
       prompt: lastHistory?.prompt || '',
-    };
-  }, []);
+    }),
+    [],
+  );
 
   async function copyCode(format: 'js' | 'yaml') {
     try {
@@ -627,7 +670,9 @@ export function Playground({
       for (let i = 0; i < stepCount; i++) {
         const type = fullValue[`type-${i}`];
         const prompt = fullValue[`prompt-${i}`];
-        if (!prompt) continue;
+        if (!prompt) {
+          continue;
+        }
         if (format === 'yaml') {
           stepContent.push({ [type]: prompt });
         } else if (format === 'js') {
@@ -662,7 +707,7 @@ export function Playground({
     }
   }
 
-  const [hoveringSettings, setHoveringSettings] = useState(false);
+  // const [hoveringSettings, setHoveringSettings] = useState(false);
   const formSection = (
     <Form
       form={form}
@@ -864,12 +909,5 @@ export function StaticPlayground({
   context: WebUIContext | null;
 }) {
   const agent = useStaticPageAgent(context);
-  return (
-    <Playground
-      getAgent={() => {
-        return agent;
-      }}
-      dryMode={true}
-    />
-  );
+  return <Playground getAgent={() => agent} dryMode={true} />;
 }

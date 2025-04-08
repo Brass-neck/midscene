@@ -757,19 +757,26 @@ const awaitTime = (time) => {
 };
 
 const defaultMaxFindTimes = (oversea) => (oversea ? 10 : 5);
+
+let AINodeTimer = null;
+let outResolve = null;
+const handleResolve = (isDone = false, outResolveFn) => {
+  if (!outResolve) outResolve = outResolveFn;
+  if (!isDone) return;
+  clearInterval(AINodeTimer);
+  AINodeTimer = null;
+  outResolve();
+  outResolve = null;
+};
+
 const excuteNode = async (node, index, uidl, tabId, extra) => {
-  chrome.runtime.sendMessage(
-    {
-      type: 'fortress:excuteNode',
-      data: {
-        node,
-        tabId,
-      },
+  chrome.runtime.sendMessage({
+    type: 'fortress:excuteNode',
+    data: {
+      node,
+      tabId,
     },
-    function (response) {
-      console.log('fortress:excuteNode received response:', response);
-    },
-  );
+  });
 
   const { isOversea, accessPartyName } = extra;
   const {
@@ -888,29 +895,23 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           }
           break;
         case NodeType.AINode:
-          function sendMessageAsync(message) {
+          function sendMessageAsync() {
             return new Promise((resolve, reject) => {
-              chrome.runtime.sendMessage(message, function (response) {
-                if (chrome.runtime.lastError) {
-                  return reject(new Error(chrome.runtime.lastError.message));
-                }
-                console.log('Received response:  ', response);
-                return resolve(response);
+              curPort.postMessage({
+                type: 'fortress:excuteAINode',
+                data: {
+                  node,
+                  tabId,
+                  excuteRecord,
+                },
               });
+              AINodeTimer = setInterval(() => {
+                handleResolve(false, resolve);
+              }, 1000);
             });
           }
 
-          const message = {
-            type: 'fortress:excuteAINode',
-            data: {
-              node,
-              tabId,
-              excuteRecord,
-            },
-          };
-          console.log('zz await 前-------------------');
-          await sendMessageAsync(message);
-          console.log('zz await 后-------------------');
+          await sendMessageAsync();
           excuteRecord.passCaseNum++;
           break;
         case NodeType.ElementClick:
@@ -1053,7 +1054,6 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           break;
         default:
       }
-      console.log('zz switch结束了-------------');
       resolve();
     } catch (e) {
       console.error('debug error', e.stack);
@@ -1203,12 +1203,10 @@ console.log('debug load contentjs');
 
         await new Promise((resolve) => {
           setTimeout(async () => {
-            //todo zz 先不要关闭浏览器，调试用，上线记得放开注释
-            console.log('zz 关闭浏览器');
-            // await chrome.runtime.sendMessage({
-            //   type: 'fortress:closepreview',
-            //   data: excuteRecord,
-            // });
+            await chrome.runtime.sendMessage({
+              type: 'fortress:closepreview',
+              data: excuteRecord,
+            });
             // chrome.runtime.sendMessage({
             //   type: 'fortress:closeurl',
             //   data: { tabId },
@@ -1220,6 +1218,9 @@ console.log('debug load contentjs');
         sendResponse({
           received: true,
         });
+      }
+      if (type === 'fortress:AINodeDone') {
+        handleResolve(true);
       }
     },
   );
