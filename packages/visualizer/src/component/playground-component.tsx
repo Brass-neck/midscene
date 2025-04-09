@@ -251,6 +251,8 @@ export function Playground({
             (node: any) => node?.name === '自然语言用例',
           );
           loadConfig(aiNode.data.formData.modelConfig.configStr || '');
+          setResult([]);
+          setReplayScriptsInfo(null);
         }
         return true;
       },
@@ -518,6 +520,8 @@ export function Playground({
     </div>
   );
   const curResult = result[curStep];
+  console.log('zz result 1',result);
+  console.log('zz curResult 2',curResult);
   if (!serverValid && serviceMode === 'Server') {
     resultDataToShow = serverLaunchTip;
   } else if (loading) {
