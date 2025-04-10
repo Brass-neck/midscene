@@ -243,7 +243,7 @@ export function Playground({
             sendResponse({ success: false, error: error?.toString() });
           }
         } else if (type === 'fortress:excuteNode') {
-          setCurStepDesc(data.node.name || '');
+          setCurStepDesc(data.node?.data?.name || data.node.name || '');
         } else if (type === 'fortress:closepreview') {
           setCurStepDesc('');
         } else if (type === 'fortress:initConfig') {

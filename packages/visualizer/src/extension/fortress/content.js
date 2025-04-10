@@ -1095,7 +1095,10 @@ const getUidlByVariableInfo = (uidl, variableInfo = {}, extra) => {
     Object.keys(formData).forEach((key) => {
       newFormData[key] = variableInfo[formData[key]]?.value ?? formData[key];
     });
-    return { ...node, data: { formData: newFormData } };
+    return {
+      ...node,
+      data: { formData: newFormData, name: node.data.name || node.name },
+    };
   });
   console.log('debug newNodes', newNodes);
   return { ...uidl, nodes: newNodes, extra };
