@@ -250,7 +250,7 @@ export function Playground({
           const aiNode = data?.nodes?.find(
             (node: any) => node?.name === '自然语言用例',
           );
-          loadConfig(aiNode.data.formData.modelConfig.configStr || '');
+          aiNode && loadConfig(aiNode.data.formData.modelConfig.configStr || '');
           setResult([]);
           setReplayScriptsInfo(null);
         }
