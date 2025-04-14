@@ -5,6 +5,7 @@ import {
   SendOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
+import { Badge, Collapse } from 'antd';
 import type { GroupedActionDump, UIContext } from '@midscene/core';
 import { Helmet } from '@modern-js/runtime/head';
 import {
@@ -202,6 +203,7 @@ export function Playground({
 
   const [loading, setLoading] = useState(false);
   const [curStepDesc, setCurStepDesc] = useState('');
+  let curStepDescVar = '';
   const [loadingProgressText, setLoadingProgressText] = useState('');
   const [stepCount, setStepCount] = useState(5);
   const [curStep, setCurStep] = useState(0);
@@ -245,14 +247,17 @@ export function Playground({
             sendResponse({ success: false, error: error?.toString() });
           }
         } else if (type === 'fortress:excuteNode') {
-          setCurStepDesc(data.node?.data?.name || data.node.name || '');
+          const curNode = data.node?.data?.name || data.node.name || '';
+          curStepDescVar = curNode;
+          setCurStepDesc(curNode);
         } else if (type === 'fortress:closepreview') {
           setCurStepDesc('');
         } else if (type === 'fortress:initConfig') {
           const aiNode = data?.nodes?.find(
             (node: any) => node?.name === '自然语言用例',
           );
-          aiNode && loadConfig(aiNode.data.formData.modelConfig.configStr || '');
+          aiNode &&
+            loadConfig(aiNode.data.formData.modelConfig.configStr || '');
           setResult([]);
           setReplayScriptsInfo(null);
         }
@@ -287,6 +292,9 @@ export function Playground({
   useEffect(() => {
     overrideAIConfig(config as any);
   }, [config]);
+
+  // 多个报告
+  const [bigNodeInfo, setBigNodeInfo] = useState({});
 
   const [replayScriptsInfo, setReplayScriptsInfo] =
     useState<ReplayScriptsInfo | null>(null);
@@ -356,165 +364,181 @@ export function Playground({
 
   const currentRunningIdRef = useRef<number | null>(0);
   const interruptedFlagRef = useRef<Record<number, boolean>>({});
-  const handleRun = useCallback(
-    async (stepIndex: number, isYamlMode = false, yamlFlowItem?: any) => {
-      const _value = form.getFieldsValue();
-      if (isYamlMode) {
-        let type = ''
-        if (yamlFlowItem.ai){
-          type = 'ai'
-        } else if (yamlFlowItem.aiQuery){
-          type = 'aiQuery'
-        } else if (yamlFlowItem.aiAssert){
-          type = 'aiAssert'
-        } else if (yamlFlowItem.sleep){
-          type = 'sleep'
-        }
-        _value[`type-${stepIndex}`] = type;
-        _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
+  const handleRun = async (
+    stepIndex: number,
+    isYamlMode = false,
+    yamlFlowItem?: any,
+  ) => {
+    const _value = form.getFieldsValue();
+    if (isYamlMode) {
+      let type = '';
+      if (yamlFlowItem.ai) {
+        type = 'ai';
+      } else if (yamlFlowItem.aiQuery) {
+        type = 'aiQuery';
+      } else if (yamlFlowItem.aiAssert) {
+        type = 'aiAssert';
+      } else if (yamlFlowItem.sleep) {
+        type = 'sleep';
       }
+      _value[`type-${stepIndex}`] = type;
+      _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
+    }
 
-      const value = {
-        type: _value[`type-${stepIndex}`],
-        prompt: _value[`prompt-${stepIndex}`],
+    const value = {
+      type: _value[`type-${stepIndex}`],
+      prompt: _value[`prompt-${stepIndex}`],
+    };
+
+    if (!value.prompt) {
+      return false;
+    }
+
+    const startTime = Date.now();
+
+    setResult((prev) => {
+      const newResult = [...prev];
+      newResult[stepIndex] = null;
+      return newResult;
+    });
+    addHistory({
+      type: value.type,
+      prompt: value.prompt,
+      timestamp: Date.now(),
+    });
+    let result: PlaygroundResult = { ...blankResult };
+
+    const activeAgent = getAgent(forceSameTabNavigation);
+    const thisRunningId = Date.now();
+    try {
+      if (!activeAgent) {
+        throw new Error('No agent found');
+      }
+      currentAgentRef.current = activeAgent;
+
+      currentRunningIdRef.current = thisRunningId;
+      interruptedFlagRef.current[thisRunningId] = false;
+      activeAgent.resetDump();
+      activeAgent.opts.onTaskStartTip = (tip: string) => {
+        if (interruptedFlagRef.current[thisRunningId]) {
+          return;
+        }
+        setLoadingProgressText(tip);
       };
-
-      if (!value.prompt) {
-        return false;
-      }
-
-      const startTime = Date.now();
-
-      setResult((prev) => {
-        const newResult = [...prev];
-        newResult[stepIndex] = null;
-        return newResult;
-      });
-      addHistory({
-        type: value.type,
-        prompt: value.prompt,
-        timestamp: Date.now(),
-      });
-      let result: PlaygroundResult = { ...blankResult };
-
-      const activeAgent = getAgent(forceSameTabNavigation);
-      const thisRunningId = Date.now();
-      try {
-        if (!activeAgent) {
-          throw new Error('No agent found');
-        }
-        currentAgentRef.current = activeAgent;
-
-        currentRunningIdRef.current = thisRunningId;
-        interruptedFlagRef.current[thisRunningId] = false;
-        activeAgent.resetDump();
-        activeAgent.opts.onTaskStartTip = (tip: string) => {
-          if (interruptedFlagRef.current[thisRunningId]) {
-            return;
-          }
-          setLoadingProgressText(tip);
-        };
-        if (serviceMode === 'Server') {
-          const uiContext = await activeAgent?.getUIContext();
-          result = await requestPlaygroundServer(
-            uiContext!,
-            value.type,
-            value.prompt,
-          );
-        } else {
-          if (value.type === 'aiAction' || value.type === 'ai') {
-            result.result = await activeAgent?.aiAction(value.prompt);
-          } else if (value.type === 'aiQuery') {
-            result.result = await activeAgent?.aiQuery(value.prompt);
-          } else if (value.type === 'aiAssert') {
-            result.result = await activeAgent?.aiAssert(
-              value.prompt,
-              undefined,
-              {
-                keepRawResponse: true,
-              },
-            );
-          } else if (value.type === 'sleep') {
-            await new Promise((resolve) => setTimeout(resolve, value.prompt));
-            result.result = 'ok';
-          }else if (value.type === 'aiYaml') {
-            const res = await activeAgent?.runYaml(value.prompt);
-            result.result = res.result;
-          }
-        }
-      } catch (e: any) {
-        const errorMessage = e?.message || '';
-        console.error(e);
-        if (errorMessage.includes('of different extension')) {
-          result.error =
-            'Conflicting extension detected. Please disable the suspicious plugins and refresh the page. Guide: https://midscenejs.com/quick-experience.html#faq';
-        } else if (
-          !errorMessage?.includes(ERROR_CODE_NOT_IMPLEMENTED_AS_DESIGNED)
-        ) {
-          result.error = errorMessage;
-        } else {
-          result.error = 'Unknown error';
-        }
-      }
-      if (interruptedFlagRef.current[thisRunningId]) {
-        console.log('interrupted, result is', result);
-        return false;
-      }
-
-      try {
-        if (
-          serviceMode === 'In-Browser' ||
-          serviceMode === 'In-Browser-Extension'
-        ) {
-          result.dump = activeAgent?.dumpDataString()
-            ? JSON.parse(activeAgent.dumpDataString())
-            : null;
-
-          result.reportHTML = activeAgent?.reportHTMLString() || null;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-
-      try {
-        console.log('destroy agent.page', activeAgent?.page);
-        await activeAgent?.page?.destroy();
-        console.log('destroy agent.page done', activeAgent?.page);
-      } catch (e) {
-        console.error(e);
-      }
-
-      currentAgentRef.current = null;
-      setResult((prev) => {
-        const newResult = [...prev];
-        newResult[stepIndex] = result;
-        return newResult;
-      });
-      if (
-        (value.type === 'ai' ||value.type === 'aiAction' || value.type === 'aiYaml') &&
-        result?.dump
-      ) {
-        const info = allScriptsFromDump(result.dump);
-        setReplayScriptsInfo(info);
-        setReplayCounter((c) => c + 1);
+      if (serviceMode === 'Server') {
+        const uiContext = await activeAgent?.getUIContext();
+        result = await requestPlaygroundServer(
+          uiContext!,
+          value.type,
+          value.prompt,
+        );
       } else {
-        setReplayScriptsInfo(null);
+        if (value.type === 'aiAction' || value.type === 'ai') {
+          result.result = await activeAgent?.aiAction(value.prompt);
+        } else if (value.type === 'aiQuery') {
+          result.result = await activeAgent?.aiQuery(value.prompt);
+        } else if (value.type === 'aiAssert') {
+          result.result = await activeAgent?.aiAssert(value.prompt, undefined, {
+            keepRawResponse: true,
+          });
+        } else if (value.type === 'sleep') {
+          await new Promise((resolve) => setTimeout(resolve, value.prompt));
+          result.result = 'ok';
+        } else if (value.type === 'aiYaml') {
+          const res = await activeAgent?.runYaml(value.prompt);
+          result.result = res.result;
+        }
       }
-      console.log(`time taken: ${Date.now() - startTime}ms`);
-    },
-    [form, getAgent, serviceMode, serverValid, forceSameTabNavigation],
-  );
+    } catch (e: any) {
+      const errorMessage = e?.message || '';
+      console.error(e);
+      if (errorMessage.includes('of different extension')) {
+        result.error =
+          'Conflicting extension detected. Please disable the suspicious plugins and refresh the page. Guide: https://midscenejs.com/quick-experience.html#faq';
+      } else if (
+        !errorMessage?.includes(ERROR_CODE_NOT_IMPLEMENTED_AS_DESIGNED)
+      ) {
+        result.error = errorMessage;
+      } else {
+        result.error = 'Unknown error';
+      }
+    }
+    if (interruptedFlagRef.current[thisRunningId]) {
+      console.log('interrupted, result is', result);
+      return false;
+    }
+
+    try {
+      if (
+        serviceMode === 'In-Browser' ||
+        serviceMode === 'In-Browser-Extension'
+      ) {
+        result.dump = activeAgent?.dumpDataString()
+          ? JSON.parse(activeAgent.dumpDataString())
+          : null;
+
+        result.reportHTML = activeAgent?.reportHTMLString() || null;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    try {
+      console.log('destroy agent.page', activeAgent?.page);
+      await activeAgent?.page?.destroy();
+      console.log('destroy agent.page done', activeAgent?.page);
+    } catch (e) {
+      console.error(e);
+    }
+
+    currentAgentRef.current = null;
+    setResult((prev) => {
+      const newResult = [...prev];
+      newResult[stepIndex] = result;
+      return newResult;
+    });
+    if (
+      (value.type === 'ai' ||
+        value.type === 'aiAction' ||
+        value.type === 'aiYaml') &&
+      result?.dump
+    ) {
+      const info = allScriptsFromDump(result.dump);
+      setReplayScriptsInfo(info);
+      setReplayCounter((c) => c + 1);
+
+      if (curStepDescVar) {
+        setBigNodeInfo((prevBigNodeInfo) => {
+          const originInfoScripts =
+            prevBigNodeInfo[curStepDescVar]?.scripts || [];
+          return {
+            ...prevBigNodeInfo,
+            [curStepDescVar]: {
+              ...info,
+              scripts: [...originInfoScripts, ...(info?.scripts || [])],
+            },
+          };
+        });
+      }
+    } else {
+      setReplayScriptsInfo(null);
+    }
+    console.log(`time taken: ${Date.now() - startTime}ms`);
+  };
 
   const handleRunYaml = async (yamlString: string) => {
-    // await handleRun(0, true, yamlString);
     setLoading(true);
-    const obj = yaml.load(yamlString)
+    const obj = yaml.load(yamlString);
 
-    if (obj.tasks && obj.tasks.length > 0) {
-      for (let i = 0; i < obj.tasks.length; i++) {
-        const task = obj.tasks[i];
-        for(let j = 0; j < task.flow.length; j++) {
-          const flowItem = task.flow[j];
+    if (obj.tasks) {
+      const tasks = obj.tasks;
+      for (let j = 0; j < tasks.length; j++) {
+        const task = tasks[j];
+        const name = task.name;
+        const flows = task.flow;
+
+        for (let i = 0; i < flows.length; i++) {
+          const flowItem = flows[i];
           const pass = await handleRun(j, true, flowItem);
           if (pass === false) {
             // not pass, return to prev step
@@ -526,6 +550,8 @@ export function Playground({
         }
       }
     }
+
+    // await handleRun(0, true, yamlString);
     setLoading(false);
   };
 
@@ -763,7 +789,12 @@ export function Playground({
           <div className="switch-btn-wrapper">{switchBtn}</div>
           {/* zz token配置 */}
           {/* 堡垒步骤展示 */}
-          <div>正在执行的节点：{curStepDesc.toString()}</div>
+          <div>
+            <Badge
+              color={curStepDesc === '' ? '#F5212D' : '#52C41A'}
+              text={`正在执行的节点：${curStepDesc.toString()}`}
+            />
+          </div>
           {/* 堡垒步骤展示 */}
         </div>
         <div
@@ -907,12 +938,38 @@ export function Playground({
     resultWrapperClassName += ' result-wrapper-compact';
   }
 
+  const items = Object.keys(bigNodeInfo).map((key) => {
+    return {
+      key: key,
+      label: `节点：${key}`,
+      children: (
+        <Player
+          key={`${curStep}-${replayCounter}`}
+          replayScripts={bigNodeInfo[key].scripts}
+          imageWidth={bigNodeInfo[key].width}
+          imageHeight={bigNodeInfo[key].height}
+          reportFileContent={
+            serviceMode === 'In-Browser-Extension' && curResult?.reportHTML
+              ? curResult?.reportHTML
+              : null
+          }
+        />
+      ),
+    };
+  });
+
   return verticalMode ? (
     <div className="playground-container vertical-mode">
       {formSection}
       <div className="form-part">
-        <div>AI 报告</div>
-        <div className={resultWrapperClassName}>{resultDataToShow}</div>
+        <Badge color="#1677FF" text="AI 报告" />
+        {loading ? (
+          <div className={resultWrapperClassName}>{resultDataToShow}</div>
+        ) : Object.keys(bigNodeInfo).length === 0 ? null : (
+          <div style={{ marginTop: '20px' }}>
+            <Collapse items={items} />
+          </div>
+        )}
         <div ref={runResultRef} />
       </div>
     </div>
