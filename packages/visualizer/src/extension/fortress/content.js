@@ -789,8 +789,8 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
       let ele;
       switch (type) {
         case NodeType.StartNode:
-          if (formData.accessPartId) {
-            switch (formData.accessPartType) {
+          if (formData?.accessPartId) {
+            switch (formData?.accessPartType) {
               case 'session_manage':
                 // ele = await findElement('span[type="user"]', undefined, defaultMaxFindTimes(isOversea), isOversea);
                 break;

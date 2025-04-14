@@ -49,6 +49,8 @@ import {
   ChromeExtensionProxyPageAgent,
 } from '@midscene/web/chrome-extension';
 import { buildYaml } from '@midscene/web/yaml';
+
+import yaml from 'js-yaml';
 // import ButtonGroup from 'antd/es/button/button-group';
 interface PlaygroundResult {
   result: any;
@@ -355,11 +357,21 @@ export function Playground({
   const currentRunningIdRef = useRef<number | null>(0);
   const interruptedFlagRef = useRef<Record<number, boolean>>({});
   const handleRun = useCallback(
-    async (stepIndex: number, isYamlMode = false, yamlContent?: string) => {
+    async (stepIndex: number, isYamlMode = false, yamlFlowItem?: any) => {
       const _value = form.getFieldsValue();
       if (isYamlMode) {
-        _value['type-0'] = 'aiYaml';
-        _value['prompt-0'] = yamlContent || '';
+        let type = ''
+        if (yamlFlowItem.ai){
+          type = 'ai'
+        } else if (yamlFlowItem.aiQuery){
+          type = 'aiQuery'
+        } else if (yamlFlowItem.aiAssert){
+          type = 'aiAssert'
+        } else if (yamlFlowItem.sleep){
+          type = 'sleep'
+        }
+        _value[`type-${stepIndex}`] = type;
+        _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
       }
 
       const value = {
@@ -410,7 +422,7 @@ export function Playground({
             value.prompt,
           );
         } else {
-          if (value.type === 'aiAction') {
+          if (value.type === 'aiAction' || value.type === 'ai') {
             result.result = await activeAgent?.aiAction(value.prompt);
           } else if (value.type === 'aiQuery') {
             result.result = await activeAgent?.aiQuery(value.prompt);
@@ -422,7 +434,10 @@ export function Playground({
                 keepRawResponse: true,
               },
             );
-          } else if (value.type === 'aiYaml') {
+          } else if (value.type === 'sleep') {
+            await new Promise((resolve) => setTimeout(resolve, value.prompt));
+            result.result = 'ok';
+          }else if (value.type === 'aiYaml') {
             const res = await activeAgent?.runYaml(value.prompt);
             result.result = res.result;
           }
@@ -476,7 +491,7 @@ export function Playground({
         return newResult;
       });
       if (
-        (value.type === 'aiAction' || value.type === 'aiYaml') &&
+        (value.type === 'ai' ||value.type === 'aiAction' || value.type === 'aiYaml') &&
         result?.dump
       ) {
         const info = allScriptsFromDump(result.dump);
@@ -491,7 +506,27 @@ export function Playground({
   );
 
   const handleRunYaml = async (yamlString: string) => {
-    await handleRun(0, true, yamlString);
+    // await handleRun(0, true, yamlString);
+    setLoading(true);
+    const obj = yaml.load(yamlString)
+
+    if (obj.tasks && obj.tasks.length > 0) {
+      for (let i = 0; i < obj.tasks.length; i++) {
+        const task = obj.tasks[i];
+        for(let j = 0; j < task.flow.length; j++) {
+          const flowItem = task.flow[j];
+          const pass = await handleRun(j, true, flowItem);
+          if (pass === false) {
+            // not pass, return to prev step
+            setCurStep((prev) => prev - 1);
+          } else {
+            // active next step
+            setCurStep(j + 1);
+          }
+        }
+      }
+    }
+    setLoading(false);
   };
 
   const handleRunFromStep = async (stepIndex: number) => {
@@ -520,8 +555,6 @@ export function Playground({
     </div>
   );
   const curResult = result[curStep];
-  console.log('zz result 1',result);
-  console.log('zz curResult 2',curResult);
   if (!serverValid && serviceMode === 'Server') {
     resultDataToShow = serverLaunchTip;
   } else if (loading) {
@@ -644,12 +677,12 @@ export function Playground({
     );
   }
 
-  const historySelector = useHistorySelector((historyItem) => {
-    form.setFieldsValue({
-      [`prompt-${curStep}`]: historyItem.prompt,
-      [`type-${curStep}`]: historyItem.type,
-    });
-  });
+  // const historySelector = useHistorySelector((historyItem) => {
+  //   form.setFieldsValue({
+  //     [`prompt-${curStep}`]: historyItem.prompt,
+  //     [`type-${curStep}`]: historyItem.type,
+  //   });
+  // });
 
   const logo = !hideLogo && (
     <div className="playground-header">
