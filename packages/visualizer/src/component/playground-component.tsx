@@ -286,6 +286,8 @@ export function Playground({
     });
     port.onMessage.addListener(async (message) => {
       const { type, data } = message;
+      console.log('CANARY【playground】port listen', message);
+
       if (type === 'fortress:excuteAINode') {
         try {
           await handleRunYaml(data.node.data.formData.ai);
@@ -401,6 +403,7 @@ export function Playground({
       _value[`type-${stepIndex}`] = type;
       _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
     }
+    console.log('CANARY【playground】handleRun _value', _value);
 
     const value = {
       type: _value[`type-${stepIndex}`],
@@ -517,6 +520,7 @@ export function Playground({
       return newResult;
     });
 
+    console.log('CANARY【playground】handleRun result', result);
     if (
       (value.type === 'ai' ||
         value.type === 'aiAction' ||
@@ -549,6 +553,7 @@ export function Playground({
   const handleRunYaml = async (yamlString: string) => {
     setLoading(true);
     const obj = yaml.load(yamlString);
+    console.log('CANARY【handleRunYaml】obj: ', obj);
 
     if (obj.tasks) {
       const tasks = obj.tasks;
@@ -1010,9 +1015,9 @@ export function Playground({
     resultWrapperClassName += ' result-wrapper-compact';
   }
 
-  const items = Object.keys(bigResult).map((key) => {
+  const items = Object.keys(bigResult).map((key, index) => {
     return {
-      key: key,
+      key: index,
       label: `节点：${key}`,
       children: (
         <Player
@@ -1053,7 +1058,7 @@ export function Playground({
               }
             />
             <div style={{ marginTop: '20px' }}>
-              <Collapse items={items} />
+              <Collapse items={items} defaultActiveKey={[0]} />
             </div>
           </>
         )}
