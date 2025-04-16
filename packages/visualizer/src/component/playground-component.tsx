@@ -4,8 +4,9 @@ import {
   LoadingOutlined,
   SendOutlined,
   SettingOutlined,
+  PoweroffOutlined,
+  ForwardOutlined,
 } from '@ant-design/icons';
-import { Badge, Collapse } from 'antd';
 import type { GroupedActionDump, UIContext } from '@midscene/core';
 import { Helmet } from '@modern-js/runtime/head';
 import {
@@ -20,6 +21,8 @@ import {
   Input,
   Dropdown,
   Space,
+  Badge,
+  Collapse,
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -284,7 +287,6 @@ export function Playground({
     port.onMessage.addListener(async (message) => {
       const { type, data } = message;
       if (type === 'fortress:excuteAINode') {
-
         try {
           await handleRunYaml(data.node.data.formData.ai);
           port.postMessage({ type: 'fortress:excuteAINode', data });
@@ -423,8 +425,8 @@ export function Playground({
     });
     let result: PlaygroundResult = { ...blankResult };
 
-    
-    currentAgentRef.current = currentAgentRef.current || getAgent(forceSameTabNavigation);
+    currentAgentRef.current =
+      currentAgentRef.current || getAgent(forceSameTabNavigation);
 
     const thisRunningId = Date.now();
     try {
@@ -455,9 +457,13 @@ export function Playground({
         } else if (value.type === 'aiQuery') {
           result.result = await currentAgentRef.current?.aiQuery(value.prompt);
         } else if (value.type === 'aiAssert') {
-          result.result = await currentAgentRef.current?.aiAssert(value.prompt, undefined, {
-            keepRawResponse: true,
-          });
+          result.result = await currentAgentRef.current?.aiAssert(
+            value.prompt,
+            undefined,
+            {
+              keepRawResponse: true,
+            },
+          );
         } else if (value.type === 'sleep') {
           await new Promise((resolve) => setTimeout(resolve, value.prompt));
           result.result = 'ok';
@@ -564,7 +570,7 @@ export function Playground({
         }
       }
     }
-    
+
     try {
       console.log('destroy agent.page', currentAgentRef.current?.page);
       await currentAgentRef.current?.page?.destroy();
@@ -681,14 +687,23 @@ export function Playground({
   const stoppable =
     !dryMode && serviceMode === 'In-Browser-Extension' && loading;
 
-  const handleStop = async (stepIndex: number) => {
+  const handleStop = async () => {
+    window.location.reload();
+  };
+
+  const handleSkipNextStep = async (stepIndex?: number) => {
     const thisRunningId = currentRunningIdRef.current;
     if (thisRunningId) {
-      await currentAgentRef.current?.destroy();
       interruptedFlagRef.current[thisRunningId] = true;
-      resetResult(stepIndex);
-      console.log('destroy agent done');
     }
+
+    await currentAgentRef.current?.destroy();
+    currentAgentRef.current = null;
+
+    setResult([]);
+    setReplayScriptsInfo(null);
+    setBigNodeInfo({});
+    setBigResult({});
   };
 
   let renderActionBtn: (stepIndex: number) => React.ReactNode = () => null;
@@ -708,7 +723,10 @@ export function Playground({
     );
   } else if (stoppable) {
     renderActionBtn = (stepIndex: number) => (
-      <Button icon={<BorderOutlined />} onClick={() => handleStop(stepIndex)}>
+      <Button
+        icon={<BorderOutlined />}
+        onClick={() => handleSkipNextStep(stepIndex)}
+      >
         Stop
       </Button>
     );
@@ -818,9 +836,36 @@ export function Playground({
               text={
                 curStepDesc === ''
                   ? '等待指令'
-                  : `正在执行的节点：${curStepDesc.toString()}`
+                  : `正在执行节点：${curStepDesc.toString()}`
               }
             />
+            {curStepDesc === '' ? null : (
+              <div>
+                <Button
+                  danger
+                  size="small"
+                  style={{
+                    fontSize: '12px',
+                    marginRight: '10px',
+                    marginTop: '15px',
+                  }}
+                  type="primary"
+                  icon={<PoweroffOutlined />}
+                  onClick={() => handleStop()}
+                >
+                  停止
+                </Button>
+                {/* <Button
+                  size="small"
+                  style={{ fontSize: '12px' }}
+                  type="primary"
+                  icon={<ForwardOutlined />}
+                  onClick={() => handleSkipNextStep()}
+                >
+                  下一步
+                </Button> */}
+              </div>
+            )}
           </div>
           {/* 堡垒步骤展示 */}
         </div>
@@ -996,7 +1041,17 @@ export function Playground({
           </>
         ) : Object.keys(bigResult).length === 0 ? null : (
           <>
-            <Badge color="#1677FF" text="AI 报告" />
+            <Badge
+              color="#1677FF"
+              text={
+                <span>
+                  AI 报告{' '}
+                  <span style={{ color: '#969393dc' }}>
+                    （仅展示 AI 节点报告）
+                  </span>
+                </span>
+              }
+            />
             <div style={{ marginTop: '20px' }}>
               <Collapse items={items} />
             </div>

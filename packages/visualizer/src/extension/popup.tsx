@@ -26,7 +26,7 @@ function PlaygroundPopup() {
   const items = [
     {
       key: 'playground',
-      label: 'Workbench',
+      label: '工作台',
       icon: <SendOutlined />,
       children: (
         <div className="popup-playground-container">

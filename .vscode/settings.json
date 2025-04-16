@@ -18,5 +18,8 @@
     "taobao",
     "targetcreated",
     "Volcengine"
-  ]
+  ],
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }
