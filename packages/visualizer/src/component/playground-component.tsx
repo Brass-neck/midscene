@@ -231,6 +231,29 @@ export function Playground({
   const runResultRef = useRef<HTMLHeadingElement>(null);
   const addHistory = useEnvConfig((state) => state.addHistory);
 
+  // 封装 port 监听
+  let sidePanelPort;
+  const portListener = () => {
+    sidePanelPort = chrome.runtime.connect('jflcdlaondhiefginpknleiabkhblnlf', {
+      name: 'fortress:sidepanel',
+    });
+    sidePanelPort.onMessage.addListener(async (message) => {
+      const { type, data } = message;
+      console.log('CANARY【playground】port listen', message);
+
+      if (type === 'fortress:excuteAINode') {
+        try {
+          await handleRunYaml(data.node.data.formData.ai);
+          sidePanelPort.postMessage({ type: 'fortress:excuteAINode', data });
+        } catch (error) {
+          console.error('sidePanel port fortress:excuteAINode error:', error);
+          sidePanelPort.postMessage({
+            message: 'sidePanel port fortress:excuteAINode error',
+          });
+        }
+      }
+    });
+  };
   // if the screen is narrow, we use vertical mode
   useEffect(() => {
     const sizeThreshold = 750;
@@ -281,28 +304,16 @@ export function Playground({
       },
     );
 
-    const port = chrome.runtime.connect('jflcdlaondhiefginpknleiabkhblnlf', {
-      name: 'fortress:sidepanel',
-    });
-    port.onMessage.addListener(async (message) => {
-      const { type, data } = message;
-      console.log('CANARY【playground】port listen', message);
-
-      if (type === 'fortress:excuteAINode') {
-        try {
-          await handleRunYaml(data.node.data.formData.ai);
-          port.postMessage({ type: 'fortress:excuteAINode', data });
-        } catch (error) {
-          console.error('sidePanel port fortress:excuteAINode error:', error);
-          port.postMessage({
-            message: 'sidePanel port fortress:excuteAINode error',
-          });
-        }
-      }
-    });
+    portListener();
+    const portCheckTimer = setInterval(() => {
+      console.log('查看port是否存在', sidePanelPort);
+      if (sidePanelPort) return;
+      portListener();
+    }, 3000);
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      clearInterval(portCheckTimer);
     };
   }, []);
 
