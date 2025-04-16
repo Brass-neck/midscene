@@ -785,7 +785,6 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
     type,
   } = node;
 
-  console.log('zz 看一下结束节点', node);
   await new Promise(async (resolve, reject) => {
     try {
       let ele;
