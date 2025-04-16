@@ -135,6 +135,7 @@ export const useEnvConfig = create<{
   configString: string;
   setConfig: (config: Record<string, string>) => void;
   loadConfig: (configString: string) => void;
+  getConfigStringFromLocalStorage: () => void;
   forceSameTabNavigation: boolean;
   setForceSameTabNavigation: (forceSameTabNavigation: boolean) => void;
   history: HistoryItem[];
@@ -168,6 +169,10 @@ export const useEnvConfig = create<{
       const config = parseConfig(configString);
       set({ config, configString });
       localStorage.setItem(CONFIG_KEY, configString);
+    },
+    getConfigStringFromLocalStorage: () => {
+      const configString = localStorage.getItem(CONFIG_KEY);
+      return configString || '';
     },
     forceSameTabNavigation: savedForceSameTabNavigation,
     setForceSameTabNavigation: (forceSameTabNavigation: boolean) => {

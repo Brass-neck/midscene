@@ -211,7 +211,13 @@ export function Playground({
   const [verticalMode, setVerticalMode] = useState(false);
   const { tabUrl } = useChromeTabInfo();
   const [form] = Form.useForm();
-  const { config, serviceMode, setServiceMode, loadConfig } = useEnvConfig();
+  const {
+    config,
+    serviceMode,
+    setServiceMode,
+    loadConfig,
+    getConfigStringFromLocalStorage,
+  } = useEnvConfig();
   const forceSameTabNavigation = useEnvConfig(
     (state) => state.forceSameTabNavigation,
   );
@@ -236,6 +242,7 @@ export function Playground({
       async (message, sender, sendResponse) => {
         const { type, data } = message;
         if (type === 'fortress:excuteAINode') {
+          // 废弃，使用 port 监听
           try {
             await handleRunYaml(data.node.data.formData.ai);
             sendResponse({
@@ -257,9 +264,14 @@ export function Playground({
             (node: any) => node?.name === '自然语言用例',
           );
           aiNode &&
-            loadConfig(aiNode.data.formData.modelConfig.configStr || '');
+            loadConfig(
+              aiNode.data.formData.modelConfig.configStr ||
+                getConfigStringFromLocalStorage() ||
+                '',
+            );
           setResult([]);
           setReplayScriptsInfo(null);
+          setBigNodeInfo({});
         }
         return true;
       },
@@ -497,6 +509,9 @@ export function Playground({
       newResult[stepIndex] = result;
       return newResult;
     });
+
+    // 每一个 action -> result -> result.dump -> info 和 info.scripts
+    //                       -> result.reportHTML
     if (
       (value.type === 'ai' ||
         value.type === 'aiAction' ||
@@ -792,7 +807,11 @@ export function Playground({
           <div>
             <Badge
               color={curStepDesc === '' ? '#F5212D' : '#52C41A'}
-              text={`正在执行的节点：${curStepDesc.toString()}`}
+              text={
+                curStepDesc === ''
+                  ? '等待指令'
+                  : `正在执行的节点：${curStepDesc.toString()}`
+              }
             />
           </div>
           {/* 堡垒步骤展示 */}
@@ -962,13 +981,18 @@ export function Playground({
     <div className="playground-container vertical-mode">
       {formSection}
       <div className="form-part">
-        <Badge color="#1677FF" text="AI 报告" />
         {loading ? (
-          <div className={resultWrapperClassName}>{resultDataToShow}</div>
+          <>
+            <Badge color="#1677FF" text="AI 思考" />
+            <div className={resultWrapperClassName}>{resultDataToShow}</div>
+          </>
         ) : Object.keys(bigNodeInfo).length === 0 ? null : (
-          <div style={{ marginTop: '20px' }}>
-            <Collapse items={items} />
-          </div>
+          <>
+            <Badge color="#1677FF" text="AI 报告" />
+            <div style={{ marginTop: '20px' }}>
+              <Collapse items={items} />
+            </div>
+          </>
         )}
         <div ref={runResultRef} />
       </div>
