@@ -13,6 +13,7 @@ const NodeType = {
   HttpRequest: 'HttpRequestNode', // http请求
   WhiteScreen: 'WhiteScreenNode', // 白屏检测
   AINode: 'AINode', // AI节点
+  EndNode: 'endNode', // 结束
   // AccessPart: 'AccessPartNode', // 切换接入方
 };
 
@@ -784,6 +785,7 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
     type,
   } = node;
 
+  console.log('zz 看一下结束节点', node);
   await new Promise(async (resolve, reject) => {
     try {
       let ele;
@@ -1051,6 +1053,9 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
             ele.dispatchEvent(event);
             excuteRecord.passCaseNum++;
           }
+          break;
+        case NodeType.EndNode:
+          excuteRecord.passCaseNum++;
           break;
         default:
       }
