@@ -261,7 +261,7 @@ export function Playground({
           setCurStepDesc('');
         } else if (type === 'fortress:initConfig') {
           const aiNode = data?.nodes?.find(
-            (node: any) => node?.name === '自然语言用例',
+            (node: any) => node?.type === 'AINode',
           );
           aiNode &&
             loadConfig(
