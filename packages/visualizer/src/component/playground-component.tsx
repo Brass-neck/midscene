@@ -272,6 +272,7 @@ export function Playground({
           setResult([]);
           setReplayScriptsInfo(null);
           setBigNodeInfo({});
+          setBigResult({});
         }
         return true;
       },
@@ -283,6 +284,7 @@ export function Playground({
     port.onMessage.addListener(async (message) => {
       const { type, data } = message;
       if (type === 'fortress:excuteAINode') {
+
         try {
           await handleRunYaml(data.node.data.formData.ai);
           port.postMessage({ type: 'fortress:excuteAINode', data });
@@ -307,9 +309,10 @@ export function Playground({
 
   // 多个报告
   const [bigNodeInfo, setBigNodeInfo] = useState({});
-
+  const [bigResult, setBigResult] = useState({});
   const [replayScriptsInfo, setReplayScriptsInfo] =
     useState<ReplayScriptsInfo | null>(null);
+
   const [replayCounter, setReplayCounter] = useState(0);
   const serverValid = useServerValid(serviceMode === 'Server');
 
@@ -420,25 +423,27 @@ export function Playground({
     });
     let result: PlaygroundResult = { ...blankResult };
 
-    const activeAgent = getAgent(forceSameTabNavigation);
+    
+    currentAgentRef.current = currentAgentRef.current || getAgent(forceSameTabNavigation);
+
     const thisRunningId = Date.now();
     try {
-      if (!activeAgent) {
+      if (!currentAgentRef.current) {
         throw new Error('No agent found');
       }
-      currentAgentRef.current = activeAgent;
+      // currentAgentRef.current = activeAgent;
 
       currentRunningIdRef.current = thisRunningId;
       interruptedFlagRef.current[thisRunningId] = false;
-      activeAgent.resetDump();
-      activeAgent.opts.onTaskStartTip = (tip: string) => {
+      // currentAgentRef.current.resetDump();
+      currentAgentRef.current.opts.onTaskStartTip = (tip: string) => {
         if (interruptedFlagRef.current[thisRunningId]) {
           return;
         }
         setLoadingProgressText(tip);
       };
       if (serviceMode === 'Server') {
-        const uiContext = await activeAgent?.getUIContext();
+        const uiContext = await currentAgentRef.current?.getUIContext();
         result = await requestPlaygroundServer(
           uiContext!,
           value.type,
@@ -446,18 +451,18 @@ export function Playground({
         );
       } else {
         if (value.type === 'aiAction' || value.type === 'ai') {
-          result.result = await activeAgent?.aiAction(value.prompt);
+          result.result = await currentAgentRef.current?.aiAction(value.prompt);
         } else if (value.type === 'aiQuery') {
-          result.result = await activeAgent?.aiQuery(value.prompt);
+          result.result = await currentAgentRef.current?.aiQuery(value.prompt);
         } else if (value.type === 'aiAssert') {
-          result.result = await activeAgent?.aiAssert(value.prompt, undefined, {
+          result.result = await currentAgentRef.current?.aiAssert(value.prompt, undefined, {
             keepRawResponse: true,
           });
         } else if (value.type === 'sleep') {
           await new Promise((resolve) => setTimeout(resolve, value.prompt));
           result.result = 'ok';
         } else if (value.type === 'aiYaml') {
-          const res = await activeAgent?.runYaml(value.prompt);
+          const res = await currentAgentRef.current?.runYaml(value.prompt);
           result.result = res.result;
         }
       }
@@ -485,33 +490,27 @@ export function Playground({
         serviceMode === 'In-Browser' ||
         serviceMode === 'In-Browser-Extension'
       ) {
-        result.dump = activeAgent?.dumpDataString()
-          ? JSON.parse(activeAgent.dumpDataString())
+        result.dump = currentAgentRef.current?.dumpDataString()
+          ? JSON.parse(currentAgentRef.current.dumpDataString())
           : null;
 
-        result.reportHTML = activeAgent?.reportHTMLString() || null;
+        result.reportHTML = currentAgentRef.current?.reportHTMLString() || null;
       }
     } catch (e) {
       console.error(e);
     }
 
-    try {
-      console.log('destroy agent.page', activeAgent?.page);
-      await activeAgent?.page?.destroy();
-      console.log('destroy agent.page done', activeAgent?.page);
-    } catch (e) {
-      console.error(e);
-    }
-
-    currentAgentRef.current = null;
     setResult((prev) => {
       const newResult = [...prev];
       newResult[stepIndex] = result;
       return newResult;
     });
 
-    // 每一个 action -> result -> result.dump -> info 和 info.scripts
-    //                       -> result.reportHTML
+    setBigResult((prev) => {
+      const newResult = { ...prev, [curStepDescVar]: result };
+      return newResult;
+    });
+
     if (
       (value.type === 'ai' ||
         value.type === 'aiAction' ||
@@ -565,6 +564,15 @@ export function Playground({
         }
       }
     }
+    
+    try {
+      console.log('destroy agent.page', currentAgentRef.current?.page);
+      await currentAgentRef.current?.page?.destroy();
+      console.log('destroy agent.page done', currentAgentRef.current?.page);
+    } catch (e) {
+      console.error(e);
+    }
+    currentAgentRef.current = null;
 
     // await handleRun(0, true, yamlString);
     setLoading(false);
@@ -618,8 +626,8 @@ export function Playground({
         imageWidth={replayScriptsInfo.width}
         imageHeight={replayScriptsInfo.height}
         reportFileContent={
-          serviceMode === 'In-Browser-Extension' && curResult?.reportHTML
-            ? curResult?.reportHTML
+          serviceMode === 'In-Browser-Extension' && bigResult?.reportHTML
+            ? bigResult?.reportHTML
             : null
         }
       />
@@ -957,7 +965,7 @@ export function Playground({
     resultWrapperClassName += ' result-wrapper-compact';
   }
 
-  const items = Object.keys(bigNodeInfo).map((key) => {
+  const items = Object.keys(bigResult).map((key) => {
     return {
       key: key,
       label: `节点：${key}`,
@@ -968,8 +976,8 @@ export function Playground({
           imageWidth={bigNodeInfo[key].width}
           imageHeight={bigNodeInfo[key].height}
           reportFileContent={
-            serviceMode === 'In-Browser-Extension' && curResult?.reportHTML
-              ? curResult?.reportHTML
+            serviceMode === 'In-Browser-Extension' && bigResult[key]?.reportHTML
+              ? bigResult[key]?.reportHTML
               : null
           }
         />
@@ -986,7 +994,7 @@ export function Playground({
             <Badge color="#1677FF" text="AI 思考" />
             <div className={resultWrapperClassName}>{resultDataToShow}</div>
           </>
-        ) : Object.keys(bigNodeInfo).length === 0 ? null : (
+        ) : Object.keys(bigResult).length === 0 ? null : (
           <>
             <Badge color="#1677FF" text="AI 报告" />
             <div style={{ marginTop: '20px' }}>
