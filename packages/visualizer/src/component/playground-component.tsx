@@ -307,7 +307,9 @@ export function Playground({
     portListener();
     const portCheckTimer = setInterval(() => {
       console.log('查看port是否存在', sidePanelPort);
-      if (sidePanelPort) return;
+      if (sidePanelPort) {
+        return;
+      }
       portListener();
     }, 3000);
 
@@ -567,10 +569,10 @@ export function Playground({
     console.log('CANARY【handleRunYaml】obj: ', obj);
 
     if (obj.tasks) {
-      const tasks = obj.tasks;
+      const { tasks } = obj;
       for (let j = 0; j < tasks.length; j++) {
         const task = tasks[j];
-        const name = task.name;
+        const { name } = task;
         const flows = task.flow;
 
         for (let i = 0; i < flows.length; i++) {
@@ -1026,25 +1028,23 @@ export function Playground({
     resultWrapperClassName += ' result-wrapper-compact';
   }
 
-  const items = Object.keys(bigResult).map((key, index) => {
-    return {
-      key: index,
-      label: `节点：${key}`,
-      children: (
-        <Player
-          key={`${curStep}-${replayCounter}`}
-          replayScripts={bigNodeInfo[key].scripts}
-          imageWidth={bigNodeInfo[key].width}
-          imageHeight={bigNodeInfo[key].height}
-          reportFileContent={
-            serviceMode === 'In-Browser-Extension' && bigResult[key]?.reportHTML
-              ? bigResult[key]?.reportHTML
-              : null
-          }
-        />
-      ),
-    };
-  });
+  const items = Object.keys(bigResult).map((key, index) => ({
+    key: index,
+    label: `节点：${key}`,
+    children: (
+      <Player
+        key={`${curStep}-${replayCounter}`}
+        replayScripts={bigNodeInfo[key]?.scripts}
+        imageWidth={bigNodeInfo[key]?.width}
+        imageHeight={bigNodeInfo[key]?.height}
+        reportFileContent={
+          serviceMode === 'In-Browser-Extension' && bigResult[key]?.reportHTML
+            ? bigResult[key]?.reportHTML
+            : null
+        }
+      />
+    ),
+  }));
 
   return verticalMode ? (
     <div className="playground-container vertical-mode">
