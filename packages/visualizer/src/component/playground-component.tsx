@@ -173,8 +173,11 @@ const serverLaunchTip = (
 );
 
 // remember to destroy the agent when the tab is destroyed: agent.page.destroy()
-export const extensionAgentForTab = (forceSameTabNavigation = true) => {
-  const page = new ChromeExtensionProxyPage(forceSameTabNavigation);
+export const extensionAgentForTab = (
+  forceSameTabNavigation = true,
+  tabId?: number,
+) => {
+  const page = new ChromeExtensionProxyPage(forceSameTabNavigation, tabId);
   return new ChromeExtensionProxyPageAgent(page);
 };
 
@@ -194,6 +197,7 @@ export function Playground({
 }: {
   getAgent: (
     forceSameTabNavigation?: boolean,
+    tabId?: number,
   ) => StaticPageAgent | ChromeExtensionProxyPageAgent | null;
   hideLogo?: boolean;
   showContextPreview?: boolean;
@@ -231,6 +235,9 @@ export function Playground({
   const runResultRef = useRef<HTMLHeadingElement>(null);
   const addHistory = useEnvConfig((state) => state.addHistory);
 
+  // AI Node Num
+  let AINodeNum = 0;
+
   // 封装 port 监听
   let sidePanelPort;
   const portListener = () => {
@@ -243,8 +250,13 @@ export function Playground({
 
       if (type === 'fortress:excuteAINode') {
         try {
-          await handleRunYaml(data.node.data.formData.ai);
-          sidePanelPort.postMessage({ type: 'fortress:excuteAINode', data });
+          const { tabId } = data;
+          await handleRunYaml(data.node.data.formData.ai, tabId);
+          --AINodeNum;
+          sidePanelPort.postMessage({
+            type: 'fortress:excuteAINode',
+            data: { AINodeNum },
+          });
         } catch (error) {
           console.error('sidePanel port fortress:excuteAINode error:', error);
           sidePanelPort.postMessage({
@@ -267,24 +279,14 @@ export function Playground({
     chrome.runtime.onMessage.addListener(
       async (message, sender, sendResponse) => {
         const { type, data } = message;
-        if (type === 'fortress:excuteAINode') {
-          // 废弃，使用 port 监听
-          try {
-            await handleRunYaml(data.node.data.formData.ai);
-            sendResponse({
-              success: true,
-              result: 'fortress:excuteAINode success!',
-            });
-          } catch (error) {
-            console.error('fortress:excuteAINode error:', error);
-            sendResponse({ success: false, error: error?.toString() });
-          }
-        } else if (type === 'fortress:excuteNode') {
+        if (type === 'fortress:excuteNode') {
           const curNode = data.node?.data?.name || data.node.name || '';
           curStepDescVar = curNode;
           setCurStepDesc(curNode);
         } else if (type === 'fortress:closepreview') {
           setCurStepDesc('');
+        } else if (type === 'fortress:initPage') {
+          window.location.reload();
         } else if (type === 'fortress:initConfig') {
           const aiNode = data?.nodes?.find(
             (node: any) => node?.type === 'AINode',
@@ -299,6 +301,8 @@ export function Playground({
           setReplayScriptsInfo(null);
           setBigNodeInfo({});
           setBigResult({});
+        } else if (type === 'fortress:calcAINode') {
+          AINodeNum = data;
         }
         return true;
       },
@@ -441,8 +445,8 @@ export function Playground({
     });
     let result: PlaygroundResult = { ...blankResult };
 
-    currentAgentRef.current =
-      currentAgentRef.current || getAgent(forceSameTabNavigation);
+    // currentAgentRef.current =
+    //   currentAgentRef.current || getAgent(forceSameTabNavigation);
 
     const thisRunningId = Date.now();
     try {
@@ -563,11 +567,12 @@ export function Playground({
     console.log(`time taken: ${Date.now() - startTime}ms`);
   };
 
-  const handleRunYaml = async (yamlString: string) => {
+  const handleRunYaml = async (yamlString: string, tabId: number) => {
     setLoading(true);
     const obj = yaml.load(yamlString);
     console.log('CANARY【handleRunYaml】obj: ', obj);
-
+    currentAgentRef.current =
+      currentAgentRef.current || getAgent(forceSameTabNavigation, tabId);
     if (obj.tasks) {
       const { tasks } = obj;
       for (let j = 0; j < tasks.length; j++) {

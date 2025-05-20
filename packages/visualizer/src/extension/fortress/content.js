@@ -790,6 +790,7 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
       let ele;
       switch (type) {
         case NodeType.StartNode:
+          console.log('debug StartNode formData', formData);
           if (formData?.accessPartId) {
             switch (formData?.accessPartType) {
               case 'session_manage':
@@ -890,6 +891,20 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
                 excuteRecord,
               },
             });
+            await awaitTime(3000);
+            const cookieKey = formData.cookieKey;
+            const cookieValue = formData.cookieValue;
+            curPort.postMessage({
+              type: 'fortress:updatecookie',
+              data: {
+                ...uidl,
+                excuteRecord,
+                cookieKey,
+                cookieValue,
+                tabId,
+              },
+            });
+            await awaitTime(1000);
             excuteRecord.passCaseNum++;
           } else {
             excuteRecord.passCaseNum++;
@@ -1054,6 +1069,13 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           }
           break;
         case NodeType.EndNode:
+          curPort.postMessage({
+            type: 'fortress:resetcookie',
+            data: {
+              ...uidl,
+              tabId,
+            },
+          });
           excuteRecord.passCaseNum++;
           break;
         default:
@@ -1073,6 +1095,18 @@ const excuteWorkflow = async (uidl, tabId, extra) => {
   excuteRecord.times++;
 
   const { nodes } = uidl;
+
+  const AINodeNum = nodes.reduce((prev, next) => {
+    if (next.type === NodeType.AINode) {
+      prev++;
+    }
+    return prev;
+  }, 0);
+
+  chrome.runtime.sendMessage({
+    type: 'fortress:calcAINode',
+    data: AINodeNum,
+  });
 
   for (let i = 0; i < nodes.length; i++) {
     console.log('debug start excuteNode', nodes[i], i);
@@ -1127,6 +1161,10 @@ if (isInFortress()) {
 
     if (chrome.runtime?.id) {
       chrome.runtime.sendMessage({
+        type: 'fortress:initPage',
+        data: getUidlByVariableInfo(uidl, variableInfo, extra),
+      });
+      chrome.runtime.sendMessage({
         type: 'fortress:initConfig',
         data: getUidlByVariableInfo(uidl, variableInfo, extra),
       });
@@ -1142,13 +1180,16 @@ function clearStorage() {
   window.localStorage.clear();
 }
 
-console.log('debug load contentjs');
+console.log('debug load contentjs', location);
 
 (async () => {
+  // 扩展ID
   curPort = chrome.runtime.connect('jflcdlaondhiefginpknleiabkhblnlf', {
     name: 'fortress:connectcontent',
   });
+
   let cache = await chrome.storage.local.get('fortressContentLoaded');
+
   if (isInFortress()) {
     await chrome.storage.local.set({ fortressContentLoaded: 0 });
   } else {
@@ -1156,6 +1197,7 @@ console.log('debug load contentjs');
       fortressContentLoaded: cache?.fortressContentLoaded + 1,
     });
   }
+
   if (cache.fortressContentLoaded > 0) {
     return;
   }
@@ -1203,7 +1245,7 @@ console.log('debug load contentjs');
           excuteRecord = record;
         }
         // 清除缓存
-        clearStorage();
+        // clearStorage();
 
         // 执行用例计划
         await excuteWorkflow(handleUidl(uidl), tabId, uidl?.extra);

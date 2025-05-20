@@ -75,6 +75,7 @@ chrome.runtime.onConnectExternal.addListener((port) => {
 });
 
 let curTabId = null as any;
+let originalCookies: chrome.cookies.Cookie[] = [];
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   const { type, data } = message;
@@ -130,16 +131,88 @@ chrome.runtime.onConnect.addListener(async (port) => {
           type: 'fortress:AINodeDone',
           data,
         });
+        if (data.AINodeNum === 0) {
+          sidepanelPort.disconnect();
+          sidepanelPort = null;
+        }
       }
     });
   }
 });
 
+const getCurrentTabInfo = async (tabId: number): Promise<chrome.tabs.Tab> =>
+  new Promise((resolve, reject) => {
+    chrome.tabs.get(tabId, (tab) => {
+      if (tab) {
+        console.log('debug getCurrentTabInfo Tab found', tab);
+        resolve(tab);
+      } else {
+        console.log('debug getCurrentTabInfo Tab not found');
+        reject(new Error('Tab not found'));
+      }
+    });
+  });
+function saveCookies(url: string): Promise<chrome.cookies.Cookie[]> {
+  return new Promise((resolve, reject) => {
+    chrome.cookies.getAll({ url }, (cookies) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve(cookies);
+      }
+    });
+  });
+}
+// 修改Cookie
+function modifyCookies(
+  url: string,
+  modifications: { name: string; value: string; domain: string }[],
+) {
+  modifications.forEach((modification) => {
+    chrome.cookies.set(
+      {
+        url,
+        name: modification.name,
+        value: modification.value,
+        domain: modification.domain,
+        expirationDate: new Date().getTime() / 1000 + 3600, // 设置1小时后过期
+      },
+      (cookie) => {
+        if (chrome.runtime.lastError) {
+          console.error(chrome.runtime.lastError);
+        } else {
+          console.log('Cookie modified successfully: ', cookie);
+        }
+      },
+    );
+  });
+}
+// 恢复Cookie
+function restoreCookies(url: string, originalCookies: chrome.cookies.Cookie[]) {
+  originalCookies.forEach((cookie) => {
+    chrome.cookies.set(
+      {
+        url,
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        expirationDate: cookie.expirationDate,
+      },
+      (cookie) => {
+        if (chrome.runtime.lastError) {
+          console.error(chrome.runtime.lastError);
+        } else {
+          console.log('Cookie restored successfully: ', cookie);
+        }
+      },
+    );
+  });
+}
+
 chrome.runtime.onConnect.addListener(async (port) => {
   if (port.name === 'fortress:connectcontent') {
-    port.onMessage.addListener((res) => {
+    port.onMessage.addListener(async (res) => {
       const { type, data } = res;
-
       if (type === 'fortress:updateurl') {
         const startNode = data?.nodes?.[0];
         const {
@@ -182,6 +255,45 @@ chrome.runtime.onConnect.addListener(async (port) => {
       }
       if (type === 'fortress:excuteAINode') {
         sidepanelPort?.postMessage(res);
+      }
+      if (type === 'fortress:updatecookie') {
+        const { cookieKey, cookieValue } = res.data;
+        const curTab = await getCurrentTabInfo(curTabId);
+        const curTabPageUrl = curTab?.url;
+        console.log(
+          'debug fortress:updateurl curTabId',
+          curTabPageUrl,
+          curTabId,
+        );
+        if (!curTabPageUrl) {
+          return;
+        }
+        // 暂存Cookie
+        saveCookies(curTabPageUrl)
+          .then((cookies) => {
+            originalCookies = cookies;
+            console.log('Cookies saved:', originalCookies);
+            const domain =
+              curTabPageUrl.match(
+                /[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,6}/,
+              )?.[0] ?? '';
+            // 修改Cookie
+            modifyCookies(curTabPageUrl, [
+              { name: cookieKey, value: cookieValue, domain },
+            ]);
+          })
+          .catch((error) => {
+            console.error('Error saving cookies:', error);
+          });
+      }
+      if (type === 'fortress:resetcookie') {
+        console.log('debug fortress:resetcookie curTabId', curTabId);
+        const curTab = await getCurrentTabInfo(curTabId);
+        const curTabPageUrl = curTab?.url;
+        if (!curTabPageUrl) {
+          return;
+        }
+        restoreCookies(curTabPageUrl, originalCookies);
       }
     });
   }
