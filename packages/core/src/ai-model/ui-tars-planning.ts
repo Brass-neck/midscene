@@ -1,11 +1,18 @@
-import assert from 'node:assert';
-import type { PlanningAction } from '@/types';
+import type { MidsceneYamlFlowItem, PlanningAction, Size } from '@/types';
+import {
+  UITarsModelVersion,
+  uiTarsModelVersion,
+  vlLocateMode,
+} from '@midscene/shared/env';
+import { resizeImgBase64 } from '@midscene/shared/img';
 import { transformHotkeyInput } from '@midscene/shared/keyboard-layout';
+import { getDebug } from '@midscene/shared/logger';
+import { assert } from '@midscene/shared/utils';
 import { actionParser } from '@ui-tars/action-parser';
 import type { ChatCompletionMessageParam } from 'openai/resources';
-import { AIActionType } from './common';
-import { getSummary, uiTarsPlanningPrompt } from './prompt/ui-tars-planning';
-import { call } from './service-caller';
+import { AIActionType, buildYamlFlowFromPlans } from './common';
+import { getSummary, getUiTarsPlanningPrompt } from './prompt/ui-tars-planning';
+import { call } from './service-caller/index';
 type ActionType =
   | 'click'
   | 'drag'
@@ -13,7 +20,25 @@ type ActionType =
   | 'hotkey'
   | 'finished'
   | 'scroll'
-  | 'wait';
+  | 'wait'
+  | 'androidBackButton'
+  | 'androidHomeButton'
+  | 'androidRecentAppsButton';
+
+const debug = getDebug('ui-tars-planning');
+const bboxSize = 10;
+const pointToBbox = (
+  point: { x: number; y: number },
+  width: number,
+  height: number,
+): [number, number, number, number] => {
+  return [
+    Math.round(Math.max(point.x - bboxSize / 2, 0)),
+    Math.round(Math.max(point.y - bboxSize / 2, 0)),
+    Math.round(Math.min(point.x + bboxSize / 2, width)),
+    Math.round(Math.min(point.y + bboxSize / 2, height)),
+  ];
+};
 
 export async function vlmPlanning(options: {
   userInstruction: string;
@@ -21,11 +46,12 @@ export async function vlmPlanning(options: {
   size: { width: number; height: number };
 }): Promise<{
   actions: PlanningAction<any>[];
-  realActions: ReturnType<typeof actionParser>['parsed'];
+  actionsFromModel: ReturnType<typeof actionParser>['parsed'];
   action_summary: string;
+  yamlFlow: MidsceneYamlFlowItem[];
 }> {
   const { conversationHistory, userInstruction, size } = options;
-  const systemPrompt = uiTarsPlanningPrompt + userInstruction;
+  const systemPrompt = getUiTarsPlanningPrompt() + userInstruction;
 
   const res = await call(
     [
@@ -37,10 +63,22 @@ export async function vlmPlanning(options: {
     ],
     AIActionType.INSPECT_ELEMENT,
   );
+  const convertedText = convertBboxToCoordinates(res.content);
+
+  const modelVer = uiTarsModelVersion();
+
   const { parsed } = actionParser({
-    prediction: res.content,
-    factor: 1000,
+    prediction: convertedText,
+    factor: [1000, 1000],
+    screenContext: {
+      width: size.width,
+      height: size.height,
+    },
+    modelVer: modelVer || undefined,
   });
+
+  debug('modelVer', modelVer, 'parsed', JSON.stringify(parsed));
+
   const transformActions: PlanningAction[] = [];
   parsed.forEach((action) => {
     if (action.action_type === 'click') {
@@ -48,20 +86,25 @@ export async function vlmPlanning(options: {
       const point = getPoint(action.action_inputs.start_box, size);
       transformActions.push({
         type: 'Locate',
+        param: {},
         locate: {
           prompt: action.thought || '',
-          position: { x: point[0], y: point[1] },
-        },
-        param: {
-          // action,
-          // position: { x: point[0], y: point[1] },
+          bbox: pointToBbox(
+            { x: point[0], y: point[1] },
+            size.width,
+            size.height,
+          ),
         },
       });
       transformActions.push({
         type: 'Tap',
         locate: {
           prompt: action.thought || '',
-          position: { x: point[0], y: point[1] },
+          bbox: pointToBbox(
+            { x: point[0], y: point[1] },
+            size.width,
+            size.height,
+          ),
         },
         param: action.thought || '',
       });
@@ -105,17 +148,22 @@ export async function vlmPlanning(options: {
         thought: action.thought || '',
       });
     } else if (action.action_type === 'hotkey') {
-      assert(action.action_inputs.key, 'key is required');
-      const keys = transformHotkeyInput(action.action_inputs.key);
+      if (!action.action_inputs.key) {
+        console.warn(
+          'No key found in action: hotkey. Will not perform action.',
+        );
+      } else {
+        const keys = transformHotkeyInput(action.action_inputs.key);
 
-      transformActions.push({
-        type: 'KeyboardPress',
-        param: {
-          value: keys,
-        },
-        locate: null,
-        thought: action.thought || '',
-      });
+        transformActions.push({
+          type: 'KeyboardPress',
+          param: {
+            value: keys,
+          },
+          locate: null,
+          thought: action.thought || '',
+        });
+      }
     } else if (action.action_type === 'wait') {
       transformActions.push({
         type: 'Sleep',
@@ -124,6 +172,25 @@ export async function vlmPlanning(options: {
         },
         locate: null,
         thought: action.thought || '',
+      });
+    } else if (action.action_type === 'androidBackButton') {
+      transformActions.push({
+        type: 'AndroidBackButton',
+        param: {},
+        locate: null,
+        thought: action.thought || '',
+      });
+    } else if (action.action_type === 'androidHomeButton') {
+      transformActions.push({
+        type: 'AndroidHomeButton',
+        param: {},
+        locate: null,
+        thought: action.thought || '',
+      });
+    } else if (action.action_type === 'androidRecentAppsButton') {
+      transformActions.push({
+        type: 'AndroidRecentAppsButton',
+        param: {},
       });
     }
   });
@@ -139,9 +206,45 @@ export async function vlmPlanning(options: {
 
   return {
     actions: transformActions,
-    realActions: parsed,
+    actionsFromModel: parsed,
     action_summary: getSummary(res.content),
+    yamlFlow: buildYamlFlowFromPlans(transformActions),
   };
+}
+
+/**
+ * Converts bounding box notation to coordinate points
+ * @param text - The text containing bbox tags to be converted
+ * @returns The text with bbox tags replaced by coordinate points
+ */
+function convertBboxToCoordinates(text: string): string {
+  // Match the four numbers after <bbox>
+  const pattern = /<bbox>(\d+)\s+(\d+)\s+(\d+)\s+(\d+)<\/bbox>/g;
+
+  function replaceMatch(
+    match: string,
+    x1: string,
+    y1: string,
+    x2: string,
+    y2: string,
+  ): string {
+    // Convert strings to numbers and calculate center point
+    const x1Num = Number.parseInt(x1, 10);
+    const y1Num = Number.parseInt(y1, 10);
+    const x2Num = Number.parseInt(x2, 10);
+    const y2Num = Number.parseInt(y2, 10);
+
+    // Use Math.floor to truncate and calculate center point
+    const x = Math.floor((x1Num + x2Num) / 2);
+    const y = Math.floor((y1Num + y2Num) / 2);
+
+    // Return formatted coordinate string
+    return `(${x},${y})`;
+  }
+
+  // Remove [EOS] and replace <bbox> coordinates
+  const cleanedText = text.replace(/\[EOS\]/g, '');
+  return cleanedText.replace(pattern, replaceMatch).trim();
 }
 
 function getPoint(startBox: string, size: { width: number; height: number }) {
@@ -212,3 +315,30 @@ export type Action =
   | ScrollAction
   | FinishedAction
   | WaitAction;
+
+export async function resizeImageForUiTars(imageBase64: string, size: Size) {
+  if (
+    vlLocateMode() === 'vlm-ui-tars' &&
+    uiTarsModelVersion() === UITarsModelVersion.V1_5
+  ) {
+    debug('ui-tars-v1.5, will check image size', size);
+    const currentPixels = size.width * size.height;
+    const maxPixels = 16384 * 28 * 28; //
+    if (currentPixels > maxPixels) {
+      const resizeFactor = Math.sqrt(maxPixels / currentPixels);
+      const newWidth = Math.floor(size.width * resizeFactor);
+      const newHeight = Math.floor(size.height * resizeFactor);
+      debug(
+        'resize image for ui-tars, new width: %s, new height: %s',
+        newWidth,
+        newHeight,
+      );
+      const resizedImage = await resizeImgBase64(imageBase64, {
+        width: newWidth,
+        height: newHeight,
+      });
+      return resizedImage;
+    }
+  }
+  return imageBase64;
+}

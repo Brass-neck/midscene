@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getTmpFile } from '@midscene/core/utils';
 import { execa } from 'execa';
 import { describe, expect, test, vi } from 'vitest';
 
@@ -60,18 +61,54 @@ describe.skipIf(!shouldRunAITest)('bin', () => {
     }).rejects.toThrow(/assertion/i);
   });
 
+  test('local server - evaluateJavaScript', async () => {
+    const output = getTmpFile('json');
+    const yamlString = `
+    target:
+      serve: ${serverRoot}
+      url: index.html
+      viewportWidth: 300
+      viewportHeight: 500
+      output: ${output}
+    tasks:
+      - name: check content
+        flow:
+          - javascript: |
+              (function() {
+                return 'bar'
+              })()
+            name: foo
+
+          - javascript: |
+              (new Promise((resolve) => {
+                setTimeout(() => {
+                  resolve('hello')
+                }, 1000)
+              }))
+            name: promise
+    `;
+    const path = await saveYaml(yamlString);
+    const params = [path];
+    await execa(cliBin, params);
+    const result = JSON.parse(readFileSync(output!, 'utf-8'));
+    expect(result).toMatchSnapshot();
+  });
+
   test('run yaml scripts', async () => {
     const params = ['./tests/midscene_scripts'];
     await execa(cliBin, params);
   });
 
   test('run yaml scripts with keepWindow', async () => {
-    const params = ['./tests/midscene_scripts/sub/bing.yaml', '--keep-window'];
+    const params = [
+      './tests/midscene_scripts/online/todomvc.yaml',
+      '--keep-window',
+    ];
     await execa(cliBin, params);
   });
 
   test('run yaml scripts with headed, put options before path', async () => {
-    const params = ['--headed', './tests/midscene_scripts/sub/bing.yaml'];
+    const params = ['--headed', './tests/midscene_scripts/online/todomvc.yaml'];
     await execa(cliBin, params);
   });
 });

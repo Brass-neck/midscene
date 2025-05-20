@@ -1,17 +1,22 @@
 import { Executor } from './ai-model/action-executor';
-import Insight from './insight';
-import { getLogDirByType, getVersion, setLogDir } from './utils';
+import Insight from './insight/index';
+import { getVersion } from './utils';
 
 export {
   plan,
-  transformElementPositionToId,
   describeUserPage,
-  AiInspectElement,
+  AiLocateElement,
   AiAssert,
-} from './ai-model';
+} from './ai-model/index';
 
-export { getAIConfig, MIDSCENE_MODEL_NAME } from './env';
+export { getAIConfig, MIDSCENE_MODEL_NAME } from '@midscene/shared/env';
 
-export * from './types';
+export type * from './types';
 export default Insight;
-export { Executor, setLogDir, getLogDirByType, Insight, getVersion };
+export { Executor, Insight, getVersion };
+
+export type {
+  MidsceneYamlScript,
+  MidsceneYamlTask,
+  MidsceneYamlFlowItem,
+} from './yaml';

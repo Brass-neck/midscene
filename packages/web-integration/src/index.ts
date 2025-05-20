@@ -1,11 +1,12 @@
 export { PlaywrightAiFixture } from './playwright';
 export type { PlayWrightAiFixtureType } from './playwright';
-export type { WebPage } from './common/page';
+export type { WebPage, AndroidDevicePage } from './common/page';
+export type { AbstractPage } from './page';
 
+export { PageAgent, type PageAgentOpt } from './common/agent';
 export { PuppeteerAgent } from './puppeteer';
 export { PlaywrightAgent } from './playwright';
-export { AppiumAgent, AppiumPage } from './appium';
 export { StaticPageAgent } from './playground/agent';
 
-export { ScriptPlayer, parseYamlScript, flowItemBrief } from './yaml';
+export { ScriptPlayer, parseYamlScript } from './yaml';
 export { parseContextFromWebPage } from './common/utils';

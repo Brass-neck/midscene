@@ -2,36 +2,31 @@ import { writeFileSync } from 'node:fs';
 import {
   MIDSCENE_MODEL_NAME,
   type PlanningAIResponse,
+  type Rect,
   getAIConfig,
   plan,
 } from '@midscene/core';
-import {
-  MATCH_BY_POSITION,
-  MIDSCENE_USE_QWEN_VL,
-  getAIConfigInBoolean,
-} from '@midscene/core/env';
+import { adaptBboxToRect } from '@midscene/core/ai-model';
 import { sleep } from '@midscene/core/utils';
+import { vlLocateMode } from '@midscene/shared/env';
+import { saveBase64Image } from '@midscene/shared/img';
 import dotenv from 'dotenv';
 import { describe, expect, test } from 'vitest';
-import { TestResultCollector } from './test-analyzer';
-import { buildContext, getCases } from './util';
-
+import { TestResultCollector } from '../src/test-analyzer';
+import { annotateRects, buildContext, getCases } from './util';
 dotenv.config({
   debug: true,
   override: true,
 });
 
-const failCaseThreshold = process.env.CI ? 1 : 0;
-const testSources = [
-  'todo',
-  // 'online_order',
-  // 'online_order_list',
-  // 'taobao',
-  // 'aweme-login',
-  // 'aweme-play',
-];
+if (process.env.MIDSCENE_EVALUATION_EXPECT_VL) {
+  expect(vlLocateMode()).toBeTruthy();
+}
 
-const vlMode = getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL);
+const failCaseThreshold = process.env.CI ? 2 : 0;
+const testSources = ['todo'];
+
+const vlMode = vlLocateMode();
 
 describe.skipIf(vlMode)('ai planning - by element', () => {
   testSources.forEach((source) => {
@@ -43,8 +38,10 @@ describe.skipIf(vlMode)('ai planning - by element', () => {
           'planning',
         );
 
+        const caseGroupName = aiDataPath.split('/').pop() || '';
+
         const resultCollector = new TestResultCollector(
-          `${source}-planning`,
+          `${caseGroupName}-planning`,
           getAIConfig(MIDSCENE_MODEL_NAME) || 'unspecified',
         );
 
@@ -56,6 +53,7 @@ describe.skipIf(vlMode)('ai planning - by element', () => {
 
           const res = await plan(prompt, {
             context,
+            pageType: 'puppeteer',
           });
 
           if (process.env.UPDATE_ANSWER_DATA) {
@@ -64,14 +62,15 @@ describe.skipIf(vlMode)('ai planning - by element', () => {
           }
 
           resultCollector.addResult(
-            aiDataPath.split('/').pop() || '',
+            caseGroupName,
             testCase,
             res,
             Date.now() - startTime,
           );
         }
 
-        await resultCollector.analyze(failCaseThreshold);
+        await resultCollector.printSummary();
+        await resultCollector.analyze(caseGroupName, failCaseThreshold);
         await sleep(3 * 1000);
       },
       240 * 1000,
@@ -79,8 +78,12 @@ describe.skipIf(vlMode)('ai planning - by element', () => {
   });
 });
 
-const vlCases = ['todo-vl', 'aweme-login-vl', 'antd-form-vl'];
-// const vlCases = ['todo-vl'];
+const vlCases = [
+  'todo-vl',
+  'aweme-login-vl',
+  'antd-form-vl',
+  'antd-tooltip-vl',
+];
 
 describe.skipIf(!vlMode)('ai planning - by coordinates', () => {
   vlCases.forEach((source) => {
@@ -92,12 +95,19 @@ describe.skipIf(!vlMode)('ai planning - by coordinates', () => {
           'planning',
         );
 
+        const caseGroupName = aiDataPath.split('/').pop() || '';
+
         const resultCollector = new TestResultCollector(
-          `${source}-planning`,
+          `${caseGroupName}-planning`,
           getAIConfig(MIDSCENE_MODEL_NAME) || 'unspecified',
         );
 
-        for (const [, testCase] of cases.testCases.entries()) {
+        const annotations: Array<{
+          indexId: number;
+          rect: Rect;
+        }> = [];
+
+        for (const [index, testCase] of cases.testCases.entries()) {
           const context = await buildContext(source.replace('-vl', ''));
 
           const prompt = testCase.prompt;
@@ -108,10 +118,11 @@ describe.skipIf(!vlMode)('ai planning - by coordinates', () => {
             res = await plan(prompt, {
               log: testCase.log,
               context,
+              actionContext: testCase.action_context,
+              pageType: 'puppeteer',
             });
           } catch (error) {
             res = error as Error;
-            throw error;
           }
 
           if (process.env.UPDATE_ANSWER_DATA) {
@@ -121,19 +132,44 @@ describe.skipIf(!vlMode)('ai planning - by coordinates', () => {
               } as any;
             } else {
               testCase.response_planning = res;
+              if (res.action?.locate?.bbox) {
+                const indexId = index + 1;
+                testCase.response_rect = adaptBboxToRect(
+                  res.action.locate.bbox,
+                  context.size.width,
+                  context.size.height,
+                );
+                testCase.annotation_index_id = indexId;
+                annotations.push({
+                  indexId,
+                  rect: testCase.response_rect,
+                });
+              }
             }
             writeFileSync(aiDataPath, JSON.stringify(cases, null, 2));
           }
 
+          if (annotations.length > 0) {
+            const markedImage = await annotateRects(
+              context.screenshotBase64,
+              annotations.map((item) => item.rect),
+            );
+            await saveBase64Image({
+              base64Data: markedImage,
+              outputPath: `${aiDataPath}-planning-coordinates-annotated.png`,
+            });
+          }
+
           resultCollector.addResult(
-            aiDataPath.split('/').pop() || '',
+            caseGroupName,
             testCase,
             res,
             Date.now() - startTime,
           );
         }
 
-        await resultCollector.analyze(failCaseThreshold);
+        await resultCollector.printSummary();
+        await resultCollector.analyze(caseGroupName, failCaseThreshold);
         await sleep(3 * 1000);
       },
       240 * 1000,

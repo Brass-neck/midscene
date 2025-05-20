@@ -8,7 +8,7 @@ import type { BaseElement, Rect, UIContext } from '../../../core';
 import { colorForName, highlightColorForType } from './color';
 import './blackboard.less';
 import { DropShadowFilter } from 'pixi-filters';
-import { useBlackboardPreference } from './store';
+import { useBlackboardPreference } from './store/store';
 
 const itemFillAlpha = 0.4;
 const highlightAlpha = 0.4;
@@ -19,25 +19,24 @@ const noop = () => {
 export const rectMarkForItem = (
   rect: Rect,
   name: string,
-  ifHighlight: boolean,
-  onPointOver?: () => void,
-  onPointerOut?: () => void,
+  type: 'element' | 'searchArea' | 'highlight',
 ) => {
   const { left, top, width, height } = rect;
-  const themeColor = ifHighlight
-    ? highlightColorForType('element')
-    : colorForName(name);
-  const alpha = ifHighlight ? highlightAlpha : itemFillAlpha;
+  let themeColor: string;
+  if (type === 'element') {
+    themeColor = colorForName(name);
+  } else if (type === 'searchArea') {
+    themeColor = highlightColorForType('searchArea');
+  } else {
+    themeColor = highlightColorForType('element');
+  }
+
+  const alpha = type === 'highlight' ? highlightAlpha : itemFillAlpha;
   const graphics = new PIXI.Graphics();
   graphics.beginFill(themeColor, alpha);
   graphics.lineStyle(1, themeColor, 1);
   graphics.drawRect(left, top, width, height);
   graphics.endFill();
-  if (onPointOver && onPointerOut) {
-    graphics.interactive = true;
-    graphics.on('pointerover', onPointOver);
-    graphics.on('pointerout', onPointerOut);
-  }
 
   const dropShadowFilter = new DropShadowFilter({
     blur: 2,
@@ -59,17 +58,18 @@ export const rectMarkForItem = (
   return [graphics, texts];
 };
 
-const Blackboard = (props: {
+export const Blackboard = (props: {
   uiContext: UIContext;
   highlightElements?: BaseElement[];
+  highlightRect?: Rect;
   hideController?: boolean;
-  disableInteraction?: boolean;
 }): JSX.Element => {
   const highlightElements: BaseElement[] = props.highlightElements || [];
   const highlightIds = highlightElements.map((e) => e.id);
+  const highlightRect = props.highlightRect;
 
   const context = props.uiContext!;
-  const { size, screenshotBase64, screenshotBase64WithElementMarker } = context;
+  const { size, screenshotBase64 } = context;
 
   const screenWidth = size.width;
   const screenHeight = size.height;
@@ -88,8 +88,6 @@ const Blackboard = (props: {
   const { markerVisible, setMarkerVisible, elementsVisible, setTextsVisible } =
     useBlackboardPreference();
 
-  const ifMarkerAvailable = !!screenshotBase64WithElementMarker;
-
   useEffect(() => {
     Promise.resolve(
       (async () => {
@@ -104,7 +102,7 @@ const Blackboard = (props: {
         const canvasEl = domRef.current;
         domRef.current.appendChild(app.canvas); // Ensure app.view is appended
         const { clientWidth } = domRef.current.parentElement!;
-        const targetHeight = window.innerHeight * 0.5;
+        const targetHeight = window.innerHeight * 0.6;
         const viewportRatio = clientWidth / targetHeight;
         if (screenWidth / screenHeight <= viewportRatio) {
           const ratio = targetHeight / screenHeight;
@@ -147,25 +145,6 @@ const Blackboard = (props: {
       backgroundSprite.width = screenWidth;
       backgroundSprite.height = screenHeight;
       app.stage.addChildAt(backgroundSprite, 0);
-
-      if (ifMarkerAvailable) {
-        const markerImg = new Image();
-        markerImg.onload = () => {
-          const markerTexture = PIXI.Texture.from(markerImg);
-          const markerSprite = new PIXI.Sprite(markerTexture);
-          markerSprite.x = 0;
-          markerSprite.y = 0;
-          markerSprite.width = screenWidth;
-          markerSprite.height = screenHeight;
-          app.stage.addChildAt(markerSprite, 1);
-          pixiBgRef.current = markerSprite;
-          markerSprite.visible = markerVisible;
-        };
-        markerImg.onerror = (e) => {
-          console.error('load marker failed', e);
-        };
-        markerImg.src = screenshotBase64WithElementMarker;
-      }
     };
     img.onerror = (e) => {
       console.error('load screenshot failed', e);
@@ -179,35 +158,34 @@ const Blackboard = (props: {
     highlightContainer.removeChildren();
     elementMarkContainer.removeChildren();
 
+    if (highlightRect) {
+      console.log('highlightRect', highlightRect);
+      const [graphics] = rectMarkForItem(
+        highlightRect,
+        'Search Area',
+        'searchArea',
+      );
+      highlightContainer.addChild(graphics);
+    }
+
+    if (highlightElements.length) {
+      highlightElements.forEach((element) => {
+        const { rect, content, id } = element;
+        const [graphics] = rectMarkForItem(rect, content, 'highlight');
+        highlightContainer.addChild(graphics);
+      });
+    }
+
     // element rects
     context.content.forEach((element) => {
       const { rect, content, id } = element;
       const ifHighlight = highlightIds.includes(id) || hoverElement?.id === id;
+
       if (ifHighlight) {
-        const [graphics] = rectMarkForItem(
-          rect,
-          content,
-          ifHighlight,
-          noop,
-          noop,
-        );
-        highlightContainer.addChild(graphics);
+        return;
       }
 
-      const removeHover = () => {
-        setHoverElement(null);
-      };
-      const [graphics] = rectMarkForItem(
-        rect,
-        content,
-        ifHighlight,
-        props?.disableInteraction
-          ? undefined
-          : () => {
-              setHoverElement(element);
-            },
-        props?.disableInteraction ? undefined : removeHover,
-      );
+      const [graphics] = rectMarkForItem(rect, content, 'element');
       elementMarkContainer.addChild(graphics);
     });
 
@@ -221,6 +199,7 @@ const Blackboard = (props: {
     highlightElements,
     context.content,
     hoverElement,
+    highlightRect,
     // bgVisible,
     // elementsVisible,
   ]);
@@ -268,13 +247,6 @@ const Blackboard = (props: {
         style={{ display: props.hideController ? 'none' : 'block' }}
       >
         <div className="overlay-control">
-          <Checkbox
-            checked={markerVisible}
-            onChange={onSetMarkerVisible}
-            disabled={!ifMarkerAvailable}
-          >
-            Marker
-          </Checkbox>
           <Checkbox checked={elementsVisible} onChange={onSetElementsVisible}>
             Elements
           </Checkbox>

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { PuppeteerAgent } from '@/puppeteer';
 import { sleep } from '@midscene/core/utils';
+import { vlLocateMode } from '@midscene/shared/env';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { launchPage } from './utils';
 
@@ -10,7 +11,12 @@ describe(
     let resetFn: () => Promise<void>;
     afterEach(async () => {
       if (resetFn) {
-        await resetFn();
+        try {
+          await resetFn();
+        } catch (e) {
+          console.warn('resetFn error');
+          console.warn(e);
+        }
       }
     });
 
@@ -27,9 +33,14 @@ describe(
 
       await sleep(10 * 1000);
 
+      const flag = await agent.aiBoolean('this is a login page');
+      expect(flag).toBe(true);
+
       await agent.aiAction(
-        'type "standard_user" in user name input, type "secret_sauce" in password, click "Login", sleep 1 second',
+        'type "standard_user" in user name input, type "secret_sauce" in password',
       );
+
+      await agent.aiTap('Login');
 
       expect(onTaskStartTip.mock.calls.length).toBeGreaterThan(1);
 
@@ -92,6 +103,43 @@ describe(
 
       expect(names.length).toBeGreaterThan(5);
     });
+
+    it.skipIf(!vlLocateMode())(
+      'search engine with specific actions',
+      async () => {
+        const { originPage, reset } = await launchPage(
+          'https://www.baidu.com/',
+        );
+        resetFn = reset;
+        const agent = new PuppeteerAgent(originPage);
+
+        await agent.aiInput('AI 101', 'the search bar input');
+        await agent.aiTap('the search button');
+
+        await sleep(3000);
+
+        await agent.aiScroll({
+          direction: 'down',
+          scrollType: 'untilBottom',
+        });
+
+        await sleep(3000);
+
+        await agent.aiTap('the settings button', {
+          deepThink: true,
+        });
+
+        await agent.aiTap('搜索设置', {
+          deepThink: true,
+        });
+
+        await agent.aiTap('the close button of the popup', {
+          deepThink: true,
+        });
+
+        await agent.aiAssert('there is NOT a popup shown in the page');
+      },
+    );
 
     it(
       'search engine',

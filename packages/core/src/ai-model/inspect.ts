@@ -1,29 +1,39 @@
-import assert from 'node:assert';
-import {
-  MIDSCENE_USE_QWEN_VL,
-  MIDSCENE_USE_VLM_UI_TARS,
-  getAIConfigInBoolean,
-} from '@/env';
 import type {
   AIAssertionResponse,
-  AIElementIdResponse,
+  AIDataExtractionResponse,
+  AIElementLocatorResponse,
   AIElementResponse,
-  AISectionParseResponse,
+  AISectionLocatorResponse,
   AISingleElementResponse,
   AISingleElementResponseByPosition,
   AIUsageInfo,
   BaseElement,
   ElementById,
   ElementTreeNode,
-  Size,
+  Rect,
   UIContext,
 } from '@/types';
-import { paddingToMatchBlock } from '@midscene/shared/img';
+import {
+  MIDSCENE_USE_QWEN_VL,
+  MIDSCENE_USE_VLM_UI_TARS,
+  getAIConfigInBoolean,
+  vlLocateMode,
+} from '@midscene/shared/env';
+import { cropByRect, paddingToMatchBlockByBase64 } from '@midscene/shared/img';
+import { getDebug } from '@midscene/shared/logger';
+import { assert } from '@midscene/shared/utils';
 import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionUserMessageParam,
 } from 'openai/resources';
-import { AIActionType, callAiFn } from './common';
+import {
+  AIActionType,
+  adaptBboxToRect,
+  callAiFn,
+  expandSearchArea,
+  markupImageForLLM,
+  mergeRects,
+} from './common';
 import { systemPromptToAssert } from './prompt/assertion';
 import { extractDataPrompt, systemPromptToExtract } from './prompt/extraction';
 import {
@@ -31,12 +41,16 @@ import {
   systemPromptToLocateElement,
 } from './prompt/llm-locator';
 import {
+  sectionLocatorInstruction,
+  systemPromptToLocateSection,
+} from './prompt/llm-section-locator';
+import {
   describeUserPage,
   distance,
   distanceThreshold,
   elementByPositionWithElementInfo,
 } from './prompt/util';
-import { callToGetJSONObject } from './service-caller';
+import { callToGetJSONObject } from './service-caller/index';
 
 export type AIArgs = [
   ChatCompletionSystemMessageParam,
@@ -48,200 +62,27 @@ const liteContextConfig = {
   truncateTextLength: 200,
 };
 
-function transformToAbsoluteCoords(
-  relativePosition: { x: number; y: number },
-  size: Size,
-) {
-  return {
-    x: Number(((relativePosition.x / 1000) * size.width).toFixed(3)),
-    y: Number(((relativePosition.y / 1000) * size.height).toFixed(3)),
-  };
-}
+const debugInspect = getDebug('ai:inspect');
+const debugSection = getDebug('ai:section');
 
-// let index = 0;
-export async function transformElementPositionToId(
-  aiResult: AIElementResponse | [number, number],
-  treeRoot: ElementTreeNode<BaseElement>,
-  size: { width: number; height: number },
-  insertElementByPosition: (position: { x: number; y: number }) => BaseElement,
-) {
-  const emptyResponse: AIElementResponse = {
-    errors: [],
-    elements: [],
-  };
-
-  const elementAtPosition = (center: { x: number; y: number }) => {
-    const element = elementByPositionWithElementInfo(treeRoot, center);
-    const distanceToCenter = element
-      ? distance({ x: element.center[0], y: element.center[1] }, center)
-      : 0;
-    return distanceToCenter <= distanceThreshold ? element : undefined;
-  };
-
-  if ('bbox' in aiResult) {
-    if (
-      !Array.isArray(aiResult.bbox) ||
-      (aiResult.bbox as number[]).length !== 4
-    ) {
-      return emptyResponse;
-    }
-
-    aiResult.bbox[0] = Math.ceil(aiResult.bbox[0]);
-    aiResult.bbox[1] = Math.ceil(aiResult.bbox[1]);
-    aiResult.bbox[2] = Math.ceil(aiResult.bbox[2]);
-    aiResult.bbox[3] = Math.ceil(aiResult.bbox[3]);
-
-    const centerX = (aiResult.bbox[0] + aiResult.bbox[2]) / 2;
-    const centerY = (aiResult.bbox[1] + aiResult.bbox[3]) / 2;
-
-    let element = elementAtPosition({ x: centerX, y: centerY });
-
-    if (!element) {
-      element = insertElementByPosition({
-        x: centerX,
-        y: centerY,
-      });
-    }
-    assert(
-      element,
-      `inspect: no element found with coordinates: ${JSON.stringify(aiResult.bbox)}`,
-    );
-    return {
-      errors: [],
-      elements: [
-        {
-          id: element.id,
-        },
-      ],
-    };
-  }
-
-  if (Array.isArray(aiResult)) {
-    // [number, number] coord
-    const relativePosition = aiResult;
-    const absolutePosition = transformToAbsoluteCoords(
-      {
-        x: relativePosition[0],
-        y: relativePosition[1],
-      },
-      size,
-    );
-
-    let element = elementAtPosition(absolutePosition);
-    if (!element) {
-      element = insertElementByPosition(absolutePosition);
-    }
-
-    assert(
-      element,
-      `inspect: no id found with position: ${JSON.stringify({ absolutePosition })}`,
-    );
-
-    return {
-      errors: [],
-      elements: [
-        {
-          id: element.id,
-        },
-      ],
-    };
-  }
-
-  return {
-    errors: aiResult.errors,
-    elements: aiResult.elements,
-  };
-}
-
-function matchQuickAnswer(
-  quickAnswer:
-    | Partial<AISingleElementResponse>
-    | Partial<AISingleElementResponseByPosition>
-    | undefined,
-  tree: ElementTreeNode<BaseElement>,
-  elementById: ElementById,
-  insertElementByPosition: (position: { x: number; y: number }) => BaseElement,
-): Awaited<ReturnType<typeof AiInspectElement>> | undefined {
-  if (!quickAnswer) {
-    return undefined;
-  }
-  if ('id' in quickAnswer && quickAnswer.id && elementById(quickAnswer.id)) {
-    return {
-      parseResult: {
-        elements: [quickAnswer as AISingleElementResponse],
-        errors: [],
-      },
-      rawResponse: quickAnswer,
-      elementById,
-    };
-  }
-
-  if ('position' in quickAnswer && quickAnswer.position) {
-    let element = elementByPositionWithElementInfo(tree, quickAnswer.position);
-    if (!element) {
-      element = insertElementByPosition(quickAnswer.position);
-    }
-    return {
-      parseResult: {
-        elements: [element],
-        errors: [],
-      },
-      rawResponse: quickAnswer,
-      elementById,
-    } as any;
-  }
-
-  if ('bbox' in quickAnswer && quickAnswer.bbox) {
-    const centerPosition = {
-      x: Math.floor((quickAnswer.bbox[0] + quickAnswer.bbox[2]) / 2),
-      y: Math.floor((quickAnswer.bbox[1] + quickAnswer.bbox[3]) / 2),
-    };
-    let element = elementByPositionWithElementInfo(tree, centerPosition);
-    if (!element) {
-      element = insertElementByPosition(centerPosition);
-    }
-    return {
-      parseResult: {
-        elements: [element],
-        errors: [],
-      },
-      rawResponse: quickAnswer,
-      elementById,
-    } as any;
-  }
-
-  return undefined;
-}
-
-export async function AiInspectElement<
+export async function AiLocateElement<
   ElementType extends BaseElement = BaseElement,
 >(options: {
   context: UIContext<ElementType>;
   targetElementDescription: string;
   callAI?: typeof callAiFn<AIElementResponse | [number, number]>;
-  quickAnswer?: Partial<
-    AISingleElementResponse | AISingleElementResponseByPosition
-  >;
+  searchConfig?: Awaited<ReturnType<typeof AiLocateSection>>;
 }): Promise<{
-  parseResult: AIElementIdResponse;
-  rawResponse: any;
+  parseResult: AIElementLocatorResponse;
+  rect?: Rect;
+  rawResponse: string;
   elementById: ElementById;
   usage?: AIUsageInfo;
 }> {
   const { context, targetElementDescription, callAI } = options;
-  const { screenshotBase64, screenshotBase64WithElementMarker } = context;
-  const { description, elementById, insertElementByPosition, size } =
+  const { screenshotBase64 } = context;
+  const { description, elementById, insertElementByPosition } =
     await describeUserPage(context);
-  // meet quick answer
-  const quickAnswer = matchQuickAnswer(
-    options.quickAnswer,
-    context.tree,
-    elementById,
-    insertElementByPosition,
-  );
-  if (quickAnswer) {
-    return quickAnswer;
-  }
 
   assert(
     targetElementDescription,
@@ -252,12 +93,29 @@ export async function AiInspectElement<
     pageDescription: description,
     targetElementDescription,
   });
-  const systemPrompt = systemPromptToLocateElement();
+  const systemPrompt = systemPromptToLocateElement(vlLocateMode());
 
-  let imagePayload = screenshotBase64WithElementMarker || screenshotBase64;
+  let imagePayload = screenshotBase64;
 
-  if (getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)) {
-    imagePayload = await paddingToMatchBlock(imagePayload);
+  if (options.searchConfig) {
+    assert(
+      options.searchConfig.rect,
+      'searchArea is provided but its rect cannot be found. Failed to locate element',
+    );
+    assert(
+      options.searchConfig.imageBase64,
+      'searchArea is provided but its imageBase64 cannot be found. Failed to locate element',
+    );
+
+    imagePayload = options.searchConfig.imageBase64;
+  } else if (vlLocateMode() === 'qwen-vl') {
+    imagePayload = await paddingToMatchBlockByBase64(imagePayload);
+  } else if (!vlLocateMode()) {
+    imagePayload = await markupImageForLLM(
+      screenshotBase64,
+      context.tree,
+      context.size,
+    );
   }
 
   const msgs: AIArgs = [
@@ -285,18 +143,154 @@ export async function AiInspectElement<
 
   const res = await callAIFn(msgs, AIActionType.INSPECT_ELEMENT);
 
-  const parseResult = await transformElementPositionToId(
-    res.content,
-    context.tree,
-    size,
-    insertElementByPosition,
-  );
+  const rawResponse = JSON.stringify(res.content);
+
+  let resRect: Rect | undefined;
+  let matchedElements: AIElementLocatorResponse['elements'] =
+    'elements' in res.content ? res.content.elements : [];
+  let errors: AIElementLocatorResponse['errors'] | undefined =
+    'errors' in res.content ? res.content.errors : [];
+  try {
+    if ('bbox' in res.content && Array.isArray(res.content.bbox)) {
+      resRect = adaptBboxToRect(
+        res.content.bbox,
+        options.searchConfig?.rect?.width || context.size.width,
+        options.searchConfig?.rect?.height || context.size.height,
+        options.searchConfig?.rect?.left,
+        options.searchConfig?.rect?.top,
+      );
+      debugInspect('resRect', resRect);
+
+      const rectCenter = {
+        x: resRect.left + resRect.width / 2,
+        y: resRect.top + resRect.height / 2,
+      };
+      let element = elementByPositionWithElementInfo(context.tree, rectCenter);
+
+      const distanceToCenter = element
+        ? distance({ x: element.center[0], y: element.center[1] }, rectCenter)
+        : 0;
+
+      if (!element || distanceToCenter > distanceThreshold) {
+        element = insertElementByPosition(rectCenter);
+      }
+
+      if (element) {
+        matchedElements = [element];
+        errors = [];
+      }
+    }
+  } catch (e) {
+    const msg =
+      e instanceof Error
+        ? `Failed to parse bbox: ${e.message}`
+        : 'unknown error in locate';
+    if (!errors || errors?.length === 0) {
+      errors = [msg];
+    } else {
+      errors.push(`(${msg})`);
+    }
+  }
 
   return {
-    parseResult,
-    rawResponse: res.content,
+    rect: resRect,
+    parseResult: {
+      elements: matchedElements,
+      errors,
+    },
+    rawResponse,
     elementById,
     usage: res.usage,
+  };
+}
+
+export async function AiLocateSection(options: {
+  context: UIContext<BaseElement>;
+  sectionDescription: string;
+  callAI?: typeof callAiFn<AISectionLocatorResponse>;
+}): Promise<{
+  rect?: Rect;
+  imageBase64?: string;
+  error?: string;
+  rawResponse: string;
+  usage?: AIUsageInfo;
+}> {
+  const { context, sectionDescription } = options;
+  const { screenshotBase64 } = context;
+
+  const systemPrompt = systemPromptToLocateSection(vlLocateMode());
+  const sectionLocatorInstructionText = await sectionLocatorInstruction.format({
+    sectionDescription,
+  });
+  const msgs: AIArgs = [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: {
+            url: screenshotBase64,
+            detail: 'high',
+          },
+        },
+        {
+          type: 'text',
+          text: sectionLocatorInstructionText,
+        },
+      ],
+    },
+  ];
+
+  const result = await callAiFn<AISectionLocatorResponse>(
+    msgs,
+    AIActionType.EXTRACT_DATA,
+  );
+
+  let sectionRect: Rect | undefined;
+  const sectionBbox = result.content.bbox;
+  if (sectionBbox) {
+    const targetRect = adaptBboxToRect(
+      sectionBbox,
+      context.size.width,
+      context.size.height,
+    );
+    debugSection('original targetRect %j', targetRect);
+
+    const referenceBboxList = result.content.references_bbox || [];
+    debugSection('referenceBboxList %j', referenceBboxList);
+
+    const referenceRects = referenceBboxList
+      .filter((bbox) => Array.isArray(bbox))
+      .map((bbox) => {
+        return adaptBboxToRect(bbox, context.size.width, context.size.height);
+      });
+    debugSection('referenceRects %j', referenceRects);
+
+    // merge the sectionRect and referenceRects
+    const mergedRect = mergeRects([targetRect, ...referenceRects]);
+    debugSection('mergedRect %j', mergedRect);
+
+    // expand search area to at least 200 x 200
+    sectionRect = expandSearchArea(mergedRect, context.size);
+    debugSection('expanded sectionRect %j', sectionRect);
+  }
+
+  let imageBase64 = screenshotBase64;
+  if (sectionRect) {
+    imageBase64 = await cropByRect(
+      screenshotBase64,
+      sectionRect,
+      getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL),
+    );
+  }
+
+  return {
+    rect: sectionRect,
+    imageBase64,
+    error: result.content.error,
+    rawResponse: JSON.stringify(result.content),
+    usage: result.usage,
   };
 }
 
@@ -351,7 +345,7 @@ export async function AiExtractElementInfo<
     },
   ];
 
-  const result = await callAiFn<AISectionParseResponse<T>>(
+  const result = await callAiFn<AIDataExtractionResponse<T>>(
     msgs,
     AIActionType.EXTRACT_DATA,
   );

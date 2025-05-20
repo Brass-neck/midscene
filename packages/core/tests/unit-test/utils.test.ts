@@ -1,20 +1,26 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  adaptDoubaoBbox,
+  adaptQwenBbox,
+  expandSearchArea,
+  mergeRects,
+} from '@/ai-model/common';
 import {
   extractJSONFromCodeBlock,
+  preprocessDoubaoBboxJson,
   safeParseJson,
 } from '@/ai-model/service-caller';
+import { getAIConfig, overrideAIConfig } from '@midscene/shared/env';
+import { describe, expect, it } from 'vitest';
 import {
   getLogDir,
   getTmpDir,
   getTmpFile,
   overlapped,
   reportHTMLContent,
-  setLogDir,
   writeDumpReport,
-} from '@/utils';
-import { describe, expect, it } from 'vitest';
+} from '../../dist/es/utils'; // use modules from dist, otherwise we will miss the template file
 
 describe('utils', () => {
   it('tmpDir', () => {
@@ -28,10 +34,6 @@ describe('utils', () => {
   it('log dir', () => {
     const dumpDir = getLogDir();
     expect(dumpDir).toBeTruthy();
-
-    setLogDir(tmpdir());
-    const dumpDir2 = getLogDir();
-    expect(dumpDir2).toBe(tmpdir());
   });
 
   it('write report file', () => {
@@ -85,9 +87,146 @@ describe('utils', () => {
     const content = randomUUID();
     const reportB = reportHTMLContent(content);
     expect(reportB).toContain(
-      `<script type="midscene_web_dump" type="application/json">${content}</script>`,
+      `<script type="midscene_web_dump" type="application/json">\n${content}\n</script>`,
     );
   });
+
+  it('reportHTMLContent with reportPath', () => {
+    const tmpFile = getTmpFile('html');
+    expect(tmpFile).toBeTruthy();
+
+    if (!tmpFile) {
+      return;
+    }
+
+    // test empty array
+    const reportPathA = reportHTMLContent([], tmpFile);
+    expect(reportPathA).toBe(tmpFile);
+    const fileContentA = readFileSync(tmpFile, 'utf-8');
+    expect(fileContentA).toContain(
+      '<script type="midscene_web_dump" type="application/json"></script>',
+    );
+
+    // test string content
+    const content = JSON.stringify({ test: randomUUID() });
+    const reportPathB = reportHTMLContent(content, tmpFile);
+    expect(reportPathB).toBe(tmpFile);
+    const fileContentB = readFileSync(tmpFile, 'utf-8');
+    expect(fileContentB).toContain(
+      `<script type="midscene_web_dump" type="application/json">\n${content}\n</script>`,
+    );
+
+    // test array with attributes
+    const uuid1 = randomUUID();
+    const uuid2 = randomUUID();
+    const dumpArray = [
+      {
+        dumpString: JSON.stringify({ id: uuid1 }),
+        attributes: {
+          test_attr: 'test_value',
+          another_attr: 'another_value',
+        },
+      },
+      {
+        dumpString: JSON.stringify({ id: uuid2 }),
+        attributes: {
+          test_attr2: 'test_value2',
+        },
+      },
+    ];
+
+    const reportPathC = reportHTMLContent(dumpArray, tmpFile);
+    expect(reportPathC).toBe(tmpFile);
+    const fileContentC = readFileSync(tmpFile, 'utf-8');
+
+    // verify the file content contains attributes and data
+    expect(fileContentC).toContain('test_attr="test_value"');
+    expect(fileContentC).toContain('another_attr="another_value"');
+    expect(fileContentC).toContain('test_attr2="test_value2"');
+    expect(fileContentC).toContain(uuid1);
+    expect(fileContentC).toContain(uuid2);
+  });
+
+  it(
+    'should handle multiple large reports correctly',
+    () => {
+      const tmpFile = getTmpFile('html');
+      expect(tmpFile).toBeTruthy();
+
+      if (!tmpFile) {
+        return;
+      }
+
+      // Create a large string of approximately 100MB
+      const generateLargeString = (sizeInMB: number, identifier: string) => {
+        const approximateCharsPer1MB = 1024 * 1024; // 1MB in characters
+        const totalChars = approximateCharsPer1MB * sizeInMB;
+
+        // Create a basic JSON structure with a very large string
+        const baseObj = {
+          id: identifier,
+          timestamp: new Date().toISOString(),
+          data: 'X'.repeat(totalChars - 100), // subtract a small amount for the JSON structure
+        };
+
+        return JSON.stringify(baseObj);
+      };
+
+      // Monitor memory usage
+      const startMemory = process.memoryUsage();
+      console.log(
+        'Memory usage before test:',
+        `RSS: ${Math.round(startMemory.rss / 1024 / 1024)}MB, ` +
+          `Heap Total: ${Math.round(startMemory.heapTotal / 1024 / 1024)}MB, ` +
+          `Heap Used: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB`,
+      );
+
+      // Store start time
+      const startTime = Date.now();
+
+      // Generate 10 large reports (each ~100MB)
+      const numberOfReports = 10;
+      const dumpArray = Array.from({ length: numberOfReports }).map(
+        (_, index) => ({
+          dumpString: generateLargeString(100, `large-report-${index + 1}`),
+          attributes: {
+            report_number: `${index + 1}`,
+            report_size: '100MB',
+          },
+        }),
+      );
+
+      // Write the large reports
+      const reportPath = reportHTMLContent(dumpArray, tmpFile);
+      expect(reportPath).toBe(tmpFile);
+
+      // Calculate execution time
+      const executionTime = Date.now() - startTime;
+      console.log(`Execution time: ${executionTime}ms`);
+
+      // Check memory usage after test
+      const endMemory = process.memoryUsage();
+      console.log(
+        'Memory usage after test:',
+        `RSS: ${Math.round(endMemory.rss / 1024 / 1024)}MB, ` +
+          `Heap Total: ${Math.round(endMemory.heapTotal / 1024 / 1024)}MB, ` +
+          `Heap Used: ${Math.round(endMemory.heapUsed / 1024 / 1024)}MB`,
+      );
+
+      // Check if file exists
+      expect(existsSync(tmpFile)).toBe(true);
+
+      // Verify file size is approximately (100MB * 10) + template size
+      const stats = statSync(tmpFile);
+      const fileSizeInMB = stats.size / (1024 * 1024);
+      console.log(`File size: ${fileSizeInMB.toFixed(2)}MB`);
+
+      // We expect the file to be approximately 700MB plus template overhead
+      const expectedMinSize = 1000; // 10 reports × 100MB
+      expect(fileSizeInMB).toBeGreaterThan(expectedMinSize);
+    },
+    { timeout: 30000 },
+  );
 });
 
 describe('extractJSONFromCodeBlock', () => {
@@ -186,5 +325,280 @@ describe('extractJSONFromCodeBlock', () => {
         nested: 'value',
       },
     });
+  });
+});
+
+describe('qwen-vl', () => {
+  it('adaptQwenBbox', () => {
+    const result = adaptQwenBbox([100.3, 200.4, 301, 401]);
+    expect(result).toEqual([100, 200, 301, 401]);
+  });
+
+  it('adaptQwenBbox with 2 points', () => {
+    const result = adaptQwenBbox([100, 200]);
+    expect(result).toEqual([100, 200, 120, 220]);
+  });
+
+  it('adaptQwenBbox with invalid bbox data', () => {
+    expect(() => adaptQwenBbox([100])).toThrow();
+  });
+});
+
+describe('doubao-vision', () => {
+  it('adaptDoubaoBbox', () => {
+    const result = adaptDoubaoBbox([100, 200, 300, 400], 400, 900);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        40,
+        180,
+        120,
+        360,
+      ]
+    `);
+  });
+  it('adaptDoubaoBbox', () => {
+    const result = adaptDoubaoBbox([[100, 200, 300, 400]] as any, 400, 900);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        40,
+        180,
+        120,
+        360,
+      ]
+    `);
+  });
+  it('adaptDoubaoBbox', () => {
+    const result = adaptDoubaoBbox(
+      [
+        [100, 200, 300, 400],
+        [100, 200, 300, 400],
+      ] as any,
+      400,
+      900,
+    );
+    expect(result).toMatchInlineSnapshot(`
+      [
+        40,
+        180,
+        120,
+        360,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox with string bbox', () => {
+    const result = adaptDoubaoBbox(['123 222', '789 100'], 1000, 2000);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        123,
+        444,
+        789,
+        200,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox with string bbox', () => {
+    const result = adaptDoubaoBbox(['123,222', '789, 100'], 1000, 2000);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        123,
+        444,
+        789,
+        200,
+      ]
+    `);
+  });
+});
+
+describe('doubao-vision', () => {
+  it('preprocessDoubaoBboxJson', () => {
+    const input = 'bbox: [123 456]';
+    const result = preprocessDoubaoBboxJson(input);
+    expect(result).toMatchInlineSnapshot(`"bbox: [123,456]"`);
+
+    const input2 = 'bbox: [1 4]';
+    const result2 = preprocessDoubaoBboxJson(input2);
+    expect(result2).toMatchInlineSnapshot(`"bbox: [1,4]"`);
+
+    const input3 = 'bbox: [123 456]\nbbox: [789 100]';
+    const result3 = preprocessDoubaoBboxJson(input3);
+    expect(result3).toMatchInlineSnapshot(`
+      "bbox: [123,456]
+      bbox: [789,100]"
+    `);
+
+    const input4 = 'bbox: [123 456,789 100]';
+    const result4 = preprocessDoubaoBboxJson(input4);
+    expect(result4).toMatchInlineSnapshot(`"bbox: [123,456,789,100]"`);
+
+    const input5 = 'bbox: [940 445 969 490]';
+    const result5 = preprocessDoubaoBboxJson(input5);
+    expect(result5).toMatchInlineSnapshot(`"bbox: [940,445,969,490]"`);
+
+    const input6 = '123 345 11111';
+    const result6 = preprocessDoubaoBboxJson(input6);
+    expect(result6).toMatchInlineSnapshot(`"123 345 11111"`);
+
+    const input7 = `
+{
+  "bbox": [
+    "550 216",
+    "550 216",
+    "550 216",
+    "550 216"
+  ],
+  "errors": []
+}
+    `;
+    const result7 = preprocessDoubaoBboxJson(input7);
+    expect(result7).toMatchInlineSnapshot(`
+      "
+      {
+        "bbox": [
+          "550,216",
+          "550,216",
+          "550,216",
+          "550,216"
+        ],
+        "errors": []
+      }
+          "
+    `);
+  });
+
+  it('adaptDoubaoBbox with 2 points', () => {
+    const result = adaptDoubaoBbox([100, 200], 1000, 2000);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        90,
+        390,
+        110,
+        410,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox', () => {
+    const result = adaptDoubaoBbox([100, 200, 300, 400], 1000, 2000);
+    expect(result).toMatchInlineSnapshot(`
+      [
+        100,
+        400,
+        300,
+        800,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox with 6 points', () => {
+    const result2 = adaptDoubaoBbox([100, 200, 300, 400, 100, 200], 1000, 2000);
+    expect(result2).toMatchInlineSnapshot(`
+      [
+        90,
+        390,
+        110,
+        410,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox with 8 points', () => {
+    const result3 = adaptDoubaoBbox(
+      [100, 200, 300, 200, 300, 400, 100, 400],
+      1000,
+      2000,
+    );
+    expect(result3).toMatchInlineSnapshot(`
+      [
+        100,
+        400,
+        300,
+        800,
+      ]
+    `);
+  });
+
+  it('adaptDoubaoBbox with invalid bbox data', () => {
+    expect(() => adaptDoubaoBbox([100], 1000, 2000)).toThrow();
+  });
+});
+
+describe('search area', () => {
+  it('mergeRects', () => {
+    const result = mergeRects([
+      { left: 10, top: 10, width: 10, height: 500 },
+      { left: 100, top: 100, width: 100, height: 100 },
+    ]);
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "height": 500,
+        "left": 10,
+        "top": 10,
+        "width": 190,
+      }
+    `);
+  });
+
+  it('expandSearchArea', () => {
+    const result = expandSearchArea(
+      { left: 100, top: 100, width: 100, height: 100 },
+      { width: 1000, height: 1000 },
+    );
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "height": 300,
+        "left": 0,
+        "top": 0,
+        "width": 300,
+      }
+    `);
+  });
+
+  it('expandSearchArea with a big rect', () => {
+    const result = expandSearchArea(
+      { left: 100, top: 100, width: 500, height: 500 },
+      { width: 1000, height: 1000 },
+    );
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "height": 820,
+        "left": 0,
+        "top": 0,
+        "width": 820,
+      }
+    `);
+  });
+
+  it('expandSearchArea with a right-most rect', () => {
+    const result = expandSearchArea(
+      { left: 951, top: 800, width: 50, height: 50 },
+      { width: 1000, height: 1000 },
+    );
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "height": 300,
+        "left": 826,
+        "top": 675,
+        "width": 174,
+      }
+    `);
+  });
+});
+
+describe('env', () => {
+  it('getAIConfig', () => {
+    const result = getAIConfig('NEVER_EXIST_CONFIG' as any);
+    expect(result).toBeUndefined();
+  });
+
+  it('overrideAIConfig', () => {
+    expect(() =>
+      overrideAIConfig({
+        MIDSCENE_CACHE: {
+          foo: 123,
+        } as any,
+      }),
+    ).toThrow();
   });
 });

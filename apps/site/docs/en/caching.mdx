@@ -1,0 +1,93 @@
+# Caching
+
+Midscene supports caching the planning steps and DOM XPaths to reduce calls to AI models and greatly improve execution efficiency.
+
+Caching is not supported in Android automation.
+
+**Effect**
+
+After enabling the cache, the execution time of AI service related steps can be significantly reduced.
+
+* **before using cache, 39s**
+
+![](/cache/no-cache-time.png)
+
+* **after using cache, 13s**
+
+![](/cache/use-cache-time.png)
+
+## Instructions
+
+There are two key points to use caching:
+
+1. Set `MIDSCENE_CACHE=1` in the environment variable to enable matching cache.
+2. Set `cacheId` to specify the cache file name. It's automatically set in Playwright and Yaml mode. If you are using javascript SDK, you should set it manually.
+
+### Playwright
+
+In playwright mode, you can use the `MIDSCENE_CACHE=1` environment variable to enable caching.
+
+The `cacheId` will be automatically set to the test file name.
+
+```diff
+- playwright test --config=playwright.config.ts
++ MIDSCENE_CACHE=1 playwright test --config=playwright.config.ts
+```
+
+### Javascript agent, like PuppeteerAgent, AgentOverChromeBridge
+
+Enable caching by setting the `MIDSCENE_CACHE=1` environment variable.
+And also, you should set the `cacheId` to specify the cache identifier.
+
+```diff
+- tsx demo.ts 
++ MIDSCENE_CACHE=1 tsx demo.ts
+```
+
+```javascript
+const mid = new PuppeteerAgent(originPage, {
+  cacheId: 'puppeteer-swag-sab', // specify cache id
+});
+```
+
+### Yaml
+
+Enable caching by setting the `MIDSCENE_CACHE=1` environment variable.
+The `cacheId` will be automatically set to the yaml filename.
+
+```diff
+- npx midscene ./bing-search.yaml
++ # Add cache identifier, cacheId is the yaml filename
++ MIDSCENE_CACHE=1 npx midscene ./bing-search.yaml
+```
+
+## Cache strategy
+
+Cache contents will be saved in the `./midscene_run/cache` directory with the `.cache.yaml` as the extension name.
+
+These two types of content will be cached:
+
+1. the result of planning, like calls to `.ai` `.aiAction`
+2. The XPaths for elements located by AI, such as `.aiLocate`, `.aiTap`, etc.
+
+The query results like `aiBoolean`, `aiQuery`, `aiAssert` will never be cached. 
+
+If the cache is not hit, Midscene will call AI model again and the result in cache file will be updated.
+
+## Common issues
+
+### How to check if the cache is hit?
+
+You can view the report file. If the cache is hit, you will see the `cache` tip and the time cost is obviously reduced.
+
+### Why the cache is missed on CI?
+
+You should commit the cache file to the repository (which is in the `./midscene_run/cache` directory). And also, check whether the prompt is the same as the one in the cache file.
+
+### Does it mean that AI services are no longer needed after using cache?
+
+No. Caching is the way to accelerate the execution, but it's not a tool for ensuring long-term script stability. We have noticed many scenarios where the cache may miss when the DOM structure changes. AI services are still needed to reevaluate the task when the cache miss occurs.
+
+### How to manually remove the cache?
+
+You can remove the cache file in the `cache` directory, or edit the contents in the cache file.

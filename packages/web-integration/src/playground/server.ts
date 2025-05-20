@@ -1,19 +1,20 @@
-import assert from 'node:assert';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { join } from 'node:path';
 import { ERROR_CODE_NOT_IMPLEMENTED_AS_DESIGNED } from '@/common/utils';
 import { getTmpDir } from '@midscene/core/utils';
+import { PLAYGROUND_SERVER_PORT } from '@midscene/shared/constants';
+import { overrideAIConfig } from '@midscene/shared/env';
 import { ifInBrowser } from '@midscene/shared/utils';
 import cors from 'cors';
+import dotenv from 'dotenv';
 import express from 'express';
-import { StaticPageAgent } from './agent';
-import StaticPage from './static-page';
+import type { PageAgent } from '../common/agent';
+import type { AbstractPage } from '../page';
 
-const defaultPort = 5800;
+const defaultPort = PLAYGROUND_SERVER_PORT;
 // const staticPath = join(__dirname, '../../static');
-let agentRequestCount = 1;
 
 const errorHandler = (err: any, req: any, res: any, next: any) => {
   console.error(err);
@@ -24,8 +25,11 @@ const errorHandler = (err: any, req: any, res: any, next: any) => {
 
 const setup = async () => {
   if (!ifInBrowser) {
-    const dotenv = await import('dotenv');
-    dotenv.config();
+    const { parsed } = dotenv.config();
+
+    if (parsed) {
+      overrideAIConfig(parsed);
+    }
   }
 };
 
@@ -34,9 +38,26 @@ export default class PlaygroundServer {
   tmpDir: string;
   server?: Server;
   port?: number | null;
-  constructor() {
+  pageClass: new (
+    ...args: any[]
+  ) => AbstractPage;
+  agentClass: new (
+    ...args: any[]
+  ) => PageAgent;
+  staticPath?: string;
+  taskProgressTips: Record<string, string>;
+
+  constructor(
+    pageClass: new (...args: any[]) => AbstractPage,
+    agentClass: new (...args: any[]) => PageAgent,
+    staticPath?: string,
+  ) {
     this.app = express();
     this.tmpDir = getTmpDir()!;
+    this.pageClass = pageClass;
+    this.agentClass = agentClass;
+    this.staticPath = staticPath;
+    this.taskProgressTips = {};
     setup();
   }
 
@@ -51,7 +72,8 @@ export default class PlaygroundServer {
     return tmpFile;
   }
 
-  async launch() {
+  async launch(port?: number) {
+    this.port = port || defaultPort;
     this.app.use(errorHandler);
 
     this.app.use(
@@ -68,11 +90,6 @@ export default class PlaygroundServer {
       });
     });
 
-    // Serve index.html for the root route
-    // this.app.get('/', (req, res) => {
-    //   res.sendFile(join(staticPath, 'index.html'));
-    // });
-
     // this.app.get('/playground/:uuid', async (req, res) => {
     //   res.sendFile(join(staticPath, 'index.html'));
     // });
@@ -80,10 +97,23 @@ export default class PlaygroundServer {
     this.app.get('/context/:uuid', async (req, res) => {
       const { uuid } = req.params;
       const contextFile = this.filePathForUuid(uuid);
-      assert(existsSync(contextFile), 'Context not found');
+
+      if (!existsSync(contextFile)) {
+        return res.status(404).json({
+          error: 'Context not found',
+        });
+      }
+
       const context = readFileSync(contextFile, 'utf8');
       res.json({
         context,
+      });
+    });
+
+    this.app.get('/task-progress/:requestId', cors(), async (req, res) => {
+      const { requestId } = req.params;
+      res.json({
+        tip: this.taskProgressTips[requestId] || '',
       });
     });
 
@@ -94,7 +124,13 @@ export default class PlaygroundServer {
       express.json({ limit: '50mb' }),
       async (req, res) => {
         const context = req.body.context;
-        assert(context, 'context is required');
+
+        if (!context) {
+          return res.status(400).json({
+            error: 'context is required',
+          });
+        }
+
         const uuid = randomUUID();
         this.saveContextFile(uuid, context);
         return res.json({
@@ -108,25 +144,50 @@ export default class PlaygroundServer {
       '/execute',
       express.json({ limit: '30mb' }),
       async (req, res) => {
-        const { context, type, prompt } = req.body;
-        assert(context, 'context is required');
-        assert(type, 'type is required');
-        assert(prompt, 'prompt is required');
-        const requestId = agentRequestCount++;
-        console.log(`handle request: #${requestId}, ${type}, ${prompt}`);
+        const { context, type, prompt, requestId, deepThink } = req.body;
+
+        if (!context) {
+          return res.status(400).json({
+            error: 'context is required',
+          });
+        }
+
+        if (!type) {
+          return res.status(400).json({
+            error: 'type is required',
+          });
+        }
+
+        if (!prompt) {
+          return res.status(400).json({
+            error: 'prompt is required',
+          });
+        }
 
         // build an agent with context
-        const page = new StaticPage(context);
-        const agent = new StaticPageAgent(page);
+        const page = new this.pageClass(context);
+        const agent = new this.agentClass(page);
+
+        if (requestId) {
+          this.taskProgressTips[requestId] = '';
+
+          agent.onTaskStartTip = (tip: string) => {
+            this.taskProgressTips[requestId] = tip;
+          };
+        }
 
         const response: {
           result: any;
           dump: string | null;
           error: string | null;
+          reportHTML: string | null;
+          requestId?: string;
         } = {
           result: null,
           dump: null,
           error: null,
+          reportHTML: null,
+          requestId,
         };
 
         const startTime = Date.now();
@@ -139,6 +200,10 @@ export default class PlaygroundServer {
             response.result = await agent.aiAssert(prompt, undefined, {
               keepRawResponse: true,
             });
+          } else if (type === 'aiTap') {
+            response.result = await agent.aiTap(prompt, {
+              deepThink,
+            });
           } else {
             response.error = `Unknown type: ${type}`;
           }
@@ -150,10 +215,12 @@ export default class PlaygroundServer {
 
         try {
           response.dump = JSON.parse(agent.dumpDataString());
+          response.reportHTML = agent.reportHTMLString() || null;
+
           agent.writeOutActionDumps();
         } catch (error: any) {
           console.error(
-            `write out dump failed: #${requestId}, ${error.message}`,
+            `write out dump failed: requestId: ${requestId}, ${error.message}`,
           );
         }
 
@@ -162,18 +229,64 @@ export default class PlaygroundServer {
 
         if (response.error) {
           console.error(
-            `handle request failed after ${timeCost}ms: #${requestId}, ${response.error}`,
+            `handle request failed after ${timeCost}ms: requestId: ${requestId}, ${response.error}`,
           );
         } else {
-          console.log(`handle request done after ${timeCost}ms: #${requestId}`);
+          console.log(
+            `handle request done after ${timeCost}ms: requestId: ${requestId}`,
+          );
         }
       },
     );
 
+    this.app.post(
+      '/config',
+      express.json({ limit: '1mb' }),
+      async (req, res) => {
+        const { aiConfig } = req.body;
+
+        if (!aiConfig || typeof aiConfig !== 'object') {
+          return res.status(400).json({
+            error: 'aiConfig is required and must be an object',
+          });
+        }
+
+        try {
+          overrideAIConfig(aiConfig);
+
+          return res.json({
+            status: 'ok',
+            message: 'AI config updated successfully',
+          });
+        } catch (error: any) {
+          console.error(`Failed to update AI config: ${error.message}`);
+          return res.status(500).json({
+            error: `Failed to update AI config: ${error.message}`,
+          });
+        }
+      },
+    );
+
+    // Set up static file serving after all API routes are defined
+    if (this.staticPath) {
+      this.app.get('/', (req, res) => {
+        // compatible with windows
+        res.redirect('/index.html');
+      });
+
+      this.app.get('*', (req, res) => {
+        const requestedPath = join(this.staticPath!, req.path);
+        if (existsSync(requestedPath)) {
+          res.sendFile(requestedPath);
+        } else {
+          res.sendFile(join(this.staticPath!, 'index.html'));
+        }
+      });
+    }
+
     return new Promise((resolve, reject) => {
-      const port = this.port || defaultPort;
+      const port = this.port;
       this.server = this.app.listen(port, () => {
-        this.port = port;
         resolve(this);
       });
     });

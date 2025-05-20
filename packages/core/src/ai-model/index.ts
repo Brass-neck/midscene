@@ -1,16 +1,19 @@
-export { callToGetJSONObject } from './service-caller';
+export { callToGetJSONObject } from './service-caller/index';
 export { systemPromptToLocateElement } from './prompt/llm-locator';
-export { describeUserPage } from './prompt/util';
+export {
+  describeUserPage,
+  elementByPositionWithElementInfo,
+} from './prompt/util';
 
 export type { ChatCompletionMessageParam } from 'openai/resources';
 
 export {
-  AiInspectElement,
+  AiLocateElement,
   AiExtractElementInfo,
   AiAssert,
-  transformElementPositionToId,
+  AiLocateSection,
 } from './inspect';
 
 export { plan } from './llm-planning';
-export { callAiFn } from './common';
-export { vlmPlanning } from './ui-tars-planning';
+export { callAiFn, adaptBboxToRect } from './common';
+export { vlmPlanning, resizeImageForUiTars } from './ui-tars-planning';

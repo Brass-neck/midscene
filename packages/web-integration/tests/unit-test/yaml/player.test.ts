@@ -1,10 +1,11 @@
-import assert from 'node:assert';
 import { join } from 'node:path';
+import { assert } from '@midscene/shared/utils';
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { puppeteerAgentForTarget } from '@/puppeteer';
+import { puppeteerAgentForTarget } from '@/puppeteer/agent-launcher';
 import { ScriptPlayer, buildYaml, parseYamlScript } from '@/yaml';
+import type { MidsceneYamlScriptWebEnv } from '@midscene/core';
 import { describe, expect, test, vi } from 'vitest';
 
 const serverRoot = join(__dirname, 'server_root');
@@ -12,7 +13,7 @@ const serverRoot = join(__dirname, 'server_root');
 const runYaml = async (yamlString: string, ignoreStatusAssertion = false) => {
   const script = parseYamlScript(yamlString);
   const statusUpdate = vi.fn();
-  const player = new ScriptPlayer(
+  const player = new ScriptPlayer<MidsceneYamlScriptWebEnv>(
     script,
     puppeteerAgentForTarget,
     statusUpdate,
@@ -38,7 +39,7 @@ describe('yaml utils', () => {
   test('basic build && load', () => {
     const script = buildYaml(
       {
-        url: 'https://www.baidu.com',
+        url: 'https://bing.com',
         waitForNetworkIdle: {
           timeout: 1000,
           continueOnNetworkIdleError: true,
@@ -150,7 +151,7 @@ describe.skipIf(!shouldRunAITest)(
     test('stop on task error', async () => {
       const yamlString = `
       target:
-        url: https://www.baidu.com
+        url: https://bing.com/
       tasks:
         - name: assert1
           flow:
@@ -169,7 +170,7 @@ describe.skipIf(!shouldRunAITest)(
     test('allow continue on task error', async () => {
       const yamlString = `
       target:
-        url: https://www.baidu.com
+        url: https://bing.com/
       tasks:
         - name: assert1
           continueOnError: true

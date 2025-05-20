@@ -1,10 +1,6 @@
-import assert from 'node:assert';
 import { PageAgent, type PageAgentOpt } from '@/common/agent';
-import type {
-  ChromePageDestroyOptions,
-  KeyboardAction,
-  MouseAction,
-} from '@/page';
+import type { KeyboardAction, MouseAction } from '@/page';
+import { assert } from '@midscene/shared/utils';
 import {
   type BridgeConnectTabOptions,
   BridgeEvent,
@@ -23,9 +19,19 @@ interface ChromeExtensionPageCliSide extends ExtensionBridgePageBrowserSide {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // actually, this is a proxy to the page in browser side
-export const getBridgePageInCliSide = (): ChromeExtensionPageCliSide => {
-  const server = new BridgeServer(DefaultBridgeServerPort);
-  server.listen();
+export const getBridgePageInCliSide = (
+  timeout?: number | false,
+  closeConflictServer?: boolean,
+): ChromeExtensionPageCliSide => {
+  const server = new BridgeServer(
+    DefaultBridgeServerPort,
+    undefined,
+    undefined,
+    closeConflictServer,
+  );
+  server.listen({
+    timeout,
+  });
   const bridgeCaller = (method: string) => {
     return async (...args: any[]) => {
       const response = await server.call(method, args);
@@ -98,8 +104,16 @@ export const getBridgePageInCliSide = (): ChromeExtensionPageCliSide => {
 };
 
 export class AgentOverChromeBridge extends PageAgent<ChromeExtensionPageCliSide> {
-  constructor(opts?: PageAgentOpt & { closeNewTabsAfterDisconnect?: boolean }) {
-    const page = getBridgePageInCliSide();
+  private destroyAfterDisconnectFlag?: boolean;
+
+  constructor(
+    opts?: PageAgentOpt & {
+      closeNewTabsAfterDisconnect?: boolean;
+      serverListeningTimeout?: number | false;
+      closeConflictServer?: boolean;
+    },
+  ) {
+    const page = getBridgePageInCliSide(opts?.serverListeningTimeout);
     super(
       page,
       Object.assign(opts || {}, {
@@ -108,10 +122,13 @@ export class AgentOverChromeBridge extends PageAgent<ChromeExtensionPageCliSide>
         },
       }),
     );
+    this.destroyAfterDisconnectFlag = opts?.closeNewTabsAfterDisconnect;
+  }
 
-    if (typeof opts?.closeNewTabsAfterDisconnect === 'boolean') {
+  async setDestroyOptionsAfterConnect() {
+    if (this.destroyAfterDisconnectFlag) {
       this.page.setDestroyOptions({
-        closeTab: opts.closeNewTabsAfterDisconnect,
+        closeTab: true,
       });
     }
   }
@@ -119,11 +136,21 @@ export class AgentOverChromeBridge extends PageAgent<ChromeExtensionPageCliSide>
   async connectNewTabWithUrl(url: string, options?: BridgeConnectTabOptions) {
     await this.page.connectNewTabWithUrl(url, options);
     await sleep(500);
+    await this.setDestroyOptionsAfterConnect();
+  }
+
+  async getBrowserTabList() {
+    return await this.page.getBrowserTabList();
+  }
+
+  async setActiveTabId(tabId: string) {
+    return await this.page.setActiveTabId(Number.parseInt(tabId));
   }
 
   async connectCurrentTab(options?: BridgeConnectTabOptions) {
     await this.page.connectCurrentTab(options);
     await sleep(500);
+    await this.setDestroyOptionsAfterConnect();
   }
 
   async aiAction(prompt: string, options?: any) {

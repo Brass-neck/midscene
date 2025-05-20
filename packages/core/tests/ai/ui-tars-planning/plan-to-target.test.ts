@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { vlmPlanning } from '@/ai-model/ui-tars-planning';
-import { getContextFromFixture } from '@/evaluation';
 import { savePositionImg } from '@midscene/shared/img';
+import { getContextFromFixture } from 'tests/evaluation';
 import { assert, describe, expect, it, test } from 'vitest';
 
 const isUiTars = process.env.MIDSCENE_USE_VLM_UI_TARS === '1';
@@ -12,7 +12,7 @@ describe.skipIf(!isUiTars)('only run in ui-tars', () => {
 
     const { width, height } = context.size;
     const startTime = Date.now();
-    const { realActions } = await vlmPlanning({
+    const { actionsFromModel } = await vlmPlanning({
       userInstruction: '删除第二条任务',
       conversationHistory: [
         {
@@ -36,8 +36,8 @@ describe.skipIf(!isUiTars)('only run in ui-tars', () => {
     const endTime = Date.now();
     const cost = (endTime - startTime) / 1000;
     const start_box =
-      'start_box' in realActions[0].action_inputs
-        ? realActions[0].action_inputs.start_box
+      'start_box' in actionsFromModel[0].action_inputs
+        ? actionsFromModel[0].action_inputs.start_box
         : '[]';
     assert(start_box, 'start_box is required');
     const box = JSON.parse(start_box);

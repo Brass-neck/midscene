@@ -1,9 +1,18 @@
 import { describeUserPage } from '@/ai-model/prompt/util';
-import { getAIConfigInBoolean } from '@/env';
-import { getContextFromFixture } from '@/evaluation';
-import { describe, expect, it } from 'vitest';
+import { vlLocateMode } from '@midscene/shared/env';
+import { getContextFromFixture } from 'tests/evaluation';
+import { describe, expect, it, vi } from 'vitest';
 
-describe('prompt utils', () => {
+// Mock vlLocateMode to return false during tests
+vi.mock('@midscene/shared/env', async () => {
+  const actual = await vi.importActual('@midscene/shared/env');
+  return {
+    ...actual,
+    vlLocateMode: () => false,
+  };
+});
+
+describe.skipIf(vlLocateMode())('prompt utils', () => {
   let lengthOfDescription: number;
   it('describe context', async () => {
     const context = await getContextFromFixture('taobao');
@@ -29,7 +38,7 @@ describe('prompt utils', () => {
     expect(description).toBeTruthy();
     expect(stringLengthOfEachItem).toBeLessThan(160);
 
-    if (!getAIConfigInBoolean('MATCH_BY_POSITION')) {
+    if (!vlLocateMode()) {
       expect(description.length).toBeLessThan(lengthOfDescription * 0.8);
     }
   });

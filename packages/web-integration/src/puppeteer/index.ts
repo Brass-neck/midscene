@@ -1,10 +1,13 @@
 import { PageAgent, type PageAgentOpt } from '@/common/agent';
+import { forceClosePopup } from '@/common/utils';
+import { getDebug } from '@midscene/shared/logger';
 import type { Page as PuppeteerPage } from 'puppeteer';
 import { WebPage as PuppeteerWebPage } from './page';
+const debug = getDebug('puppeteer:agent');
 
 export { WebPage as PuppeteerWebPage } from './page';
 
-export class PuppeteerAgent extends PageAgent {
+export class PuppeteerAgent extends PageAgent<PuppeteerWebPage> {
   constructor(page: PuppeteerPage, opts?: PageAgentOpt) {
     const webPage = new PuppeteerWebPage(page);
     super(webPage, opts);
@@ -12,22 +15,12 @@ export class PuppeteerAgent extends PageAgent {
     const { forceSameTabNavigation = true } = opts ?? {};
 
     if (forceSameTabNavigation) {
-      page.on('popup', async (popup) => {
-        if (!popup) {
-          console.warn(
-            'got a popup event, but the popup is not ready yet, skip',
-          );
-          return;
-        }
-        const url = await popup.url();
-        console.log(`Popup opened: ${url}`);
-        await popup.close(); // Close the newly opened TAB
-        await page.goto(url);
-      });
+      forceClosePopup(page, debug);
     }
   }
 }
 
-export { overrideAIConfig } from '@midscene/core/env';
+export { overrideAIConfig } from '@midscene/shared/env';
 
-export { puppeteerAgentForTarget } from './agent-launcher';
+// Do NOT export this since it requires puppeteer
+// export { puppeteerAgentForTarget } from './agent-launcher';

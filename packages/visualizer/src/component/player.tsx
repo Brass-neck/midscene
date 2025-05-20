@@ -9,8 +9,8 @@ import {
   DownloadOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import type { BaseElement } from '@midscene/core';
-import { Button, ConfigProvider, Spin } from 'antd';
+import type { BaseElement, LocateResultElement, Rect } from '@midscene/core';
+import { Spin, Tooltip } from 'antd';
 import { rectMarkForItem } from './blackboard';
 import { getTextureFromCache, loadTexture } from './pixi-loader';
 import type {
@@ -18,7 +18,6 @@ import type {
   CameraState,
   TargetCameraState,
 } from './replay-scripts';
-import { useExecutionDump } from './store';
 
 const canvasPaddingLeft = 0;
 const canvasPaddingTop = 0;
@@ -115,7 +114,7 @@ const downloadReport = (content: string): void => {
   a.click();
 };
 
-export default function Player(props?: {
+export function Player(props?: {
   replayScripts?: AnimationScript[];
   imageWidth?: number;
   imageHeight?: number;
@@ -124,26 +123,14 @@ export default function Player(props?: {
 }): JSX.Element {
   const [titleText, setTitleText] = useState('');
   const [subTitleText, setSubTitleText] = useState('');
-  const taskScripts = useExecutionDump(
-    (store) => store.activeExecutionAnimation,
-  );
 
-  const scripts = props?.replayScripts ? props.replayScripts : taskScripts;
-  const imageWidth =
-    props?.imageWidth ||
-    useExecutionDump((store) => store.insightWidth) ||
-    1920;
-  const imageHeight =
-    props?.imageHeight ||
-    useExecutionDump((store) => store.insightHeight) ||
-    1080;
-  const canvasWidth = imageWidth + canvasPaddingLeft * 2;
-  const canvasHeight = imageHeight + canvasPaddingTop * 2;
+  const scripts = props?.replayScripts;
+  const imageWidth = props?.imageWidth || 1920;
+  const imageHeight = props?.imageHeight || 1080;
   const currentImg = useRef<string | null>(scripts?.[0]?.img || null);
 
   const divContainerRef = useRef<HTMLDivElement>(null);
   const app = useMemo<PIXI.Application>(() => new PIXI.Application(), []);
-  const imgSpriteMap = useRef<Map<string, PIXI.Sprite>>(new Map());
 
   const pointerSprite = useRef<PIXI.Sprite | null>(null);
   const spinningPointerSprite = useRef<PIXI.Sprite | null>(null);
@@ -207,8 +194,11 @@ export default function Player(props?: {
     }
     sprite.label = mainImgLabel;
     sprite.zIndex = LAYER_ORDER_IMG;
+
+    // use original size, keep image quality
     sprite.width = imageWidth;
     sprite.height = imageHeight;
+
     windowContentContainer.addChild(sprite);
   };
 
@@ -454,7 +444,8 @@ export default function Player(props?: {
 
   const insightElementsAnimation = async (
     elements: BaseElement[],
-    highlightElements: BaseElement[],
+    highlightElements: (BaseElement | LocateResultElement)[],
+    searchArea: Rect | undefined,
     duration: number,
     frame: FrameFn,
   ): Promise<void> => {
@@ -481,7 +472,7 @@ export default function Player(props?: {
             const [insightMarkGraphic] = rectMarkForItem(
               element.rect,
               element.content,
-              false,
+              'element',
             );
             insightMarkGraphic.alpha = 0;
             insightMarkContainer.addChild(insightMarkGraphic);
@@ -506,16 +497,27 @@ export default function Player(props?: {
             const [insightMarkGraphic] = rectMarkForItem(
               element.rect,
               element.content,
-              false,
+              'element',
             );
             insightMarkGraphic.alpha = 1; // Set alpha to 1 immediately for remaining items
             insightMarkContainer.addChild(insightMarkGraphic);
           }
+
+          if (searchArea) {
+            const [searchAreaGraphic] = rectMarkForItem(
+              searchArea,
+              'Search Area',
+              'searchArea',
+            );
+            searchAreaGraphic.alpha = 1;
+            insightMarkContainer.addChild(searchAreaGraphic);
+          }
+
           highlightElements.map((element) => {
             const [insightMarkGraphic] = rectMarkForItem(
               element.rect,
-              element.content,
-              true,
+              (element as BaseElement).content || '',
+              'highlight',
             );
             insightMarkGraphic.alpha = 1;
             insightMarkContainer.addChild(insightMarkGraphic);
@@ -532,12 +534,18 @@ export default function Player(props?: {
   const init = async (): Promise<void> => {
     if (!divContainerRef.current || !scripts) return;
 
+    // use original image size for initialization
+    // this can keep the original image quality, then scale the canvas with CSS
     await app.init({
-      width: canvasWidth,
-      height: canvasHeight,
+      width: imageWidth,
+      height: imageHeight,
       background: 0xf4f4f4,
+      autoDensity: true,
+      antialias: true,
     });
-    divContainerRef.current.appendChild(app.canvas); // Ensure app.view is appended
+
+    if (!divContainerRef.current) return;
+    divContainerRef.current.appendChild(app.canvas);
 
     windowContentContainer.x = 0;
     windowContentContainer.y = 0;
@@ -568,7 +576,9 @@ export default function Player(props?: {
           .map((item) => item.img!);
 
         // Load and display the image
-        await Promise.all([...allImages, mouseLoading].map(loadTexture));
+        await Promise.all(
+          [...allImages, mouseLoading, mousePointer].map(loadTexture),
+        );
 
         // pointer on top
         insightMarkContainer.removeChildren();
@@ -605,17 +615,20 @@ export default function Player(props?: {
           if (item.type === 'sleep') {
             await sleep(item.duration);
           } else if (item.type === 'insight') {
-            if (!item.insightDump || !item.img) {
-              throw new Error('insight dump or img is required');
+            if (!item.img) {
+              throw new Error('img is required');
             }
             currentImg.current = item.img;
             await repaintImage();
 
-            const elements = item.insightDump.context.content;
-            const highlightElements = item.insightDump.matchedElement;
+            const elements = item.context?.content || [];
+            const highlightElements = item.highlightElement
+              ? [item.highlightElement]
+              : [];
             await insightElementsAnimation(
               elements,
               highlightElements,
+              item.searchArea,
               item.duration,
               frame,
             );
@@ -711,82 +724,66 @@ export default function Player(props?: {
   }, [canReplayNow]);
 
   let statusIconElement;
-  const statusStyle: React.CSSProperties = {};
   let statusOnClick: () => void = () => {};
   if (animationProgress < 1) {
     statusIconElement = (
-      <Spin indicator={<LoadingOutlined spin />} size="default" />
+      <Spin indicator={<LoadingOutlined spin color="#333" />} size="default" />
     );
   } else if (mouseOverStatusIcon) {
     statusIconElement = (
-      <Spin indicator={<CaretRightOutlined />} size="default" />
+      <Spin indicator={<CaretRightOutlined color="#333" />} size="default" />
     );
-    statusStyle.cursor = 'pointer';
-    statusStyle.background = '#888';
     statusOnClick = () => setReplayMark(Date.now());
   } else {
     statusIconElement = (
       // <Spin indicator={<CheckCircleOutlined />} size="default" />
-      <Spin indicator={<CaretRightOutlined />} size="default" />
+      <Spin indicator={<CaretRightOutlined color="#333" />} size="default" />
     );
   }
-
-  const playerTopToolbar = props?.reportFileContent ? (
-    <div className="player-tools-right">
-      <div className="player-tools-item">
-        <Button
-          color="primary"
-          variant="link"
-          size="small"
-          icon={<DownloadOutlined />}
-          onClick={() => downloadReport(props.reportFileContent!)}
-        >
-          Report File
-        </Button>
-      </div>
-    </div>
-  ) : null;
 
   return (
     <div className="player-container">
       <div className="canvas-container" ref={divContainerRef} />
-      <div className="player-timeline">
-        <div
-          className="player-timeline-progress"
-          style={{
-            width: `${progressString}%`,
-            transition: transitionStyle,
-          }}
-        />
-      </div>
-      <div className="player-tools">
-        <div className="player-control">
+      <div className="player-timeline-wrapper">
+        <div className="player-timeline">
           <div
-            className="status-icon"
-            onMouseEnter={() => setMouseOverStatusIcon(true)}
-            onMouseLeave={() => setMouseOverStatusIcon(false)}
-            style={statusStyle}
-            onClick={statusOnClick}
-          >
-            <ConfigProvider
-              theme={{
-                components: {
-                  Spin: {
-                    dotSize: 24,
-                    colorPrimary: 'rgb(6,177,171)',
-                  },
-                },
-              }}
+            className="player-timeline-progress"
+            style={{
+              width: `${progressString}%`,
+              transition: transitionStyle,
+            }}
+          />
+        </div>
+      </div>
+      <div className="player-tools-wrapper">
+        <div className="player-tools">
+          <div className="player-control">
+            <div className="status-text">
+              <div className="title">{titleText}</div>
+              <Tooltip title={subTitleText}>
+                <div className="subtitle">{subTitleText}</div>
+              </Tooltip>
+            </div>
+            <div
+              className="status-icon"
+              onMouseEnter={() => setMouseOverStatusIcon(true)}
+              onMouseLeave={() => setMouseOverStatusIcon(false)}
+              onClick={statusOnClick}
             >
               {statusIconElement}
-            </ConfigProvider>
-          </div>
-          <div className="status-text">
-            <div className="title">{titleText}</div>
-            <div className="subtitle">{subTitleText}</div>
+            </div>
+            {props?.reportFileContent ? (
+              <div
+                className="status-icon"
+                onMouseEnter={() => setMouseOverStatusIcon(true)}
+                onMouseLeave={() => setMouseOverStatusIcon(false)}
+                onClick={() => downloadReport(props.reportFileContent!)}
+              >
+                <DownloadOutlined color="#333" />
+              </div>
+            ) : null}
           </div>
         </div>
-        {playerTopToolbar}
       </div>
     </div>
   );

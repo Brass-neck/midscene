@@ -6,12 +6,12 @@ import { paramStr, typeStr } from '@midscene/web/ui-utils';
 import type {
   ExecutionDump,
   ExecutionTask,
-  ExecutionTaskApply,
   ExecutionTaskInsightLocate,
   ExecutionTaskPlanning,
   GroupedActionDump,
-  InsightDump,
+  LocateResultElement,
   Rect,
+  UIContext,
 } from '@midscene/core';
 
 export interface CameraState {
@@ -38,7 +38,9 @@ export interface AnimationScript {
     | 'sleep';
   img?: string;
   camera?: TargetCameraState;
-  insightDump?: InsightDump;
+  context?: UIContext;
+  highlightElement?: LocateResultElement;
+  searchArea?: Rect;
   duration: number;
   insightCameraDuration?: number;
   title?: string;
@@ -116,8 +118,8 @@ export const mergeTwoCameraState = (
 
 export interface ReplayScriptsInfo {
   scripts: AnimationScript[];
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
   sdkVersion?: string;
   modelName?: string;
   modelDescription?: string;
@@ -127,13 +129,25 @@ export const allScriptsFromDump = (
   dump: GroupedActionDump,
 ): ReplayScriptsInfo | null => {
   // find out the width and height of the screenshot
-  let width = 0;
-  let height = 0;
-  let sdkVersion = '';
-  let modelName = '';
-  let modelDescription = '';
+  let width: number | undefined = undefined;
+  let height: number | undefined = undefined;
+  let sdkVersion: string | undefined = undefined;
+  let modelName: string | undefined = undefined;
+  let modelDescription: string | undefined = undefined;
 
   dump.executions.forEach((execution) => {
+    if (execution.sdkVersion) {
+      sdkVersion = execution.sdkVersion;
+    }
+
+    if (execution.model_name) {
+      modelName = execution.model_name;
+    }
+
+    if (execution.model_description) {
+      modelDescription = execution.model_description;
+    }
+
     execution.tasks.forEach((task) => {
       const insightTask = task as ExecutionTaskInsightLocate;
       if (insightTask.pageContext?.size?.width) {
@@ -141,28 +155,33 @@ export const allScriptsFromDump = (
         height = insightTask.pageContext.size.height;
       }
 
-      if (insightTask.log?.dump?.sdkVersion) {
+      if (insightTask.log?.dump?.sdkVersion && !sdkVersion) {
         sdkVersion = insightTask.log.dump.sdkVersion;
       }
 
-      if (insightTask.log?.dump?.model_name) {
+      if (insightTask.log?.dump?.model_name && !modelName) {
         modelName = insightTask.log.dump.model_name;
       }
 
-      if (insightTask.log?.dump?.model_description) {
+      if (insightTask.log?.dump?.model_description && !modelDescription) {
         modelDescription = insightTask.log.dump.model_description;
       }
     });
   });
 
   if (!width || !height) {
-    console.error('width or height is missing in dump file');
-    return null;
+    console.warn('width or height is missing in dump file');
+    return {
+      scripts: [],
+      sdkVersion,
+      modelName,
+      modelDescription,
+    };
   }
 
   const allScripts: AnimationScript[] = [];
   dump.executions.forEach((execution) => {
-    const scripts = generateAnimationScripts(execution, -1, width, height);
+    const scripts = generateAnimationScripts(execution, -1, width!, height!);
     if (scripts) {
       allScripts.push(...scripts);
     }
@@ -267,6 +286,10 @@ export const generateAnimationScripts = (
   tasksIncluded.forEach((task, index) => {
     if (errorStateFlag) return;
 
+    if (index === 0) {
+      initSubTitle = paramStr(task);
+    }
+
     if (task.type === 'Planning') {
       const planningTask = task as ExecutionTaskPlanning;
       if (planningTask.recorder && planningTask.recorder.length > 0) {
@@ -278,9 +301,8 @@ export const generateAnimationScripts = (
           title: typeStr(task),
           subTitle: paramStr(task),
         });
-        initSubTitle = paramStr(task);
       }
-    } else if (task.type === 'Insight') {
+    } else if (task.type === 'Insight' && task.subType === 'Locate') {
       const insightTask = task as ExecutionTaskInsightLocate;
       const resultElement = insightTask.output?.element;
       const title = typeStr(task);
@@ -292,18 +314,16 @@ export const generateAnimationScripts = (
           pointerTop: resultElement.center[1],
         };
       }
-      if (insightTask.log?.dump) {
-        const insightDump = insightTask.log.dump;
-        if (!insightDump?.context?.screenshotBase64) {
-          throw new Error('insight dump is required');
-        }
-        const insightContentLength = insightDump.context.content.length;
+      const context = insightTask.pageContext;
+      if (context?.screenshotBase64) {
+        const insightDump = insightTask.log?.dump;
+        const insightContentLength = context.content.length;
 
-        if (insightDump.context.screenshotBase64WithElementMarker) {
+        if (context.screenshotBase64) {
           // show the original screenshot first
           scripts.push({
             type: 'img',
-            img: insightDump.context.screenshotBase64,
+            img: context.screenshotBase64,
             duration: stillAfterInsightDuration,
             title,
             subTitle,
@@ -324,11 +344,11 @@ export const generateAnimationScripts = (
 
         scripts.push({
           type: 'insight',
-          img:
-            insightDump.context.screenshotBase64WithElementMarker ||
-            insightDump.context.screenshotBase64,
-          insightDump: insightDump,
+          img: context.screenshotBase64,
+          context: context,
           camera: cameraState,
+          highlightElement: insightTask.output?.element || undefined,
+          searchArea: insightDump?.taskInfo?.searchArea,
           duration:
             insightContentLength > 20 ? locateDuration : locateDuration * 0.5,
           insightCameraDuration: locateDuration,
@@ -435,7 +455,7 @@ export const generateAnimationScripts = (
     });
   }
 
-  // console.log('replayscripts');
+  // console.log('replay scripts');
   // console.log(scripts, tasksIncluded);
 
   return scripts;

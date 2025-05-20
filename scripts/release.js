@@ -145,7 +145,7 @@ async function test() {
 async function bumpExtensionVersion(newNpmVersion) {
   const manifestPath = path.join(
     __dirname,
-    '../packages/visualizer/unpacked-extension/manifest.json',
+    '../apps/chrome-extension/static/manifest.json',
   );
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const [a, b] = manifest.version.split('.').map(Number);

@@ -2,13 +2,13 @@ import { sha256 } from 'js-sha256';
 
 export const ifInBrowser = typeof window !== 'undefined';
 
-export function uuid() {
+export function uuid(): string {
   return Math.random().toString(36).substring(2, 15);
 }
 
 const hashMap: Record<string, string> = {}; // id - combined
 
-export function generateHashId(rect: any, content = '') {
+export function generateHashId(rect: any, content = ''): string {
   // Combine the input into a string
   const combined = JSON.stringify({
     content,
@@ -21,7 +21,7 @@ export function generateHashId(rect: any, content = '') {
   const hashHex = sha256.create().update(combined).hex();
 
   // Convert hex to a-z by mapping each hex char to a letter
-  const toLetters = (hex: string) => {
+  const toLetters = (hex: string): string => {
     return hex
       .split('')
       .map((char) => {
@@ -43,4 +43,56 @@ export function generateHashId(rect: any, content = '') {
     break;
   }
   return slicedHash;
+}
+
+/**
+ * A utility function that asserts a condition and throws an error with a message if the condition is false.
+ *
+ * @param condition - The condition to assert
+ * @param message - The error message to throw if the condition is false
+ * @throws Error with the provided message if the condition is false
+ */
+export function assert(condition: any, message?: string): asserts condition {
+  if (!condition) {
+    throw new Error(message || 'Assertion failed');
+  }
+}
+
+type GlobalScope = typeof window | typeof globalThis | typeof self | undefined;
+
+export function getGlobalScope(): GlobalScope {
+  if (typeof window !== 'undefined') {
+    return window;
+  }
+
+  if (typeof globalThis !== 'undefined') {
+    return globalThis;
+  }
+
+  if (typeof self !== 'undefined') {
+    return self;
+  }
+  return undefined;
+}
+
+let isMcp = false;
+
+export function setIsMcp(value: boolean) {
+  isMcp = value;
+}
+
+//mcp need use obj format to console msg: https://github.com/modelcontextprotocol/typescript-sdk/issues/244
+export function logMsg(...message: Parameters<typeof console.log>) {
+  if (!isMcp) {
+    console.log(...message);
+  }
+}
+
+export async function repeat(
+  times: number,
+  fn: (index: number) => Promise<void>,
+) {
+  for (let i = 0; i < times; i++) {
+    await fn(i);
+  }
 }

@@ -1,0 +1,95 @@
+# 缓存
+
+Midscene 支持缓存 Plan 的步骤与匹配到的 DOM 元素信息，减少 AI 模型的调用次数，从而大幅提升执行效率。
+
+Android 自动化任务不支持缓存策略。
+
+**效果**
+
+通过引入缓存后，用例的执行时间大幅降低了，例如从39秒降低到了13秒。
+
+* **before**
+
+![](/cache/no-cache-time.png)
+
+* **after**
+
+![](/cache/use-cache-time.png)
+
+## 使用方式
+
+想要启用缓存特性，有两个关键点：
+
+1. 设置 `MIDSCENE_CACHE=1` 环境变量，用以启用缓存匹配
+2. 设置 `cacheId` 来指定缓存文件名。在 Playwright 和 Yaml 模式下，`cacheId` 会自动设置为测试文件名，在 Javascript 模式下，需要手动设置 `cacheId`。
+
+### Playwright
+
+在 Playwright 模式下，只需要设置 `MIDSCENE_CACHE=1` 环境变量即可。
+
+`cacheId` 会自动设置为测试文件名。
+
+```diff
+- playwright test --config=playwright.config.ts
++ MIDSCENE_CACHE=1 playwright test --config=playwright.config.ts
+```
+
+### Javascript agent, 例如 PuppeteerAgent, AgentOverChromeBridge
+
+在 Javascript 模式下，需要设置 `MIDSCENE_CACHE=1` 环境变量，并且需要手动设置 `cacheId`。
+
+```diff
+- tsx demo.ts 
++ MIDSCENE_CACHE=1 tsx demo.ts
+```
+
+```javascript
+const mid = new PuppeteerAgent(originPage, {
+  cacheId: 'puppeteer-swag-sab', // 增加缓存标识
+});
+```
+
+### Yaml
+
+在 Yaml 模式下，需要设置 `MIDSCENE_CACHE=1` 环境变量。
+
+`cacheId` 会自动设置为 yaml 文件名。
+
+```diff
+- npx midscene ./bing-search.yaml
++ # 增加缓存标识, cacheId 为 yaml 文件名
++ MIDSCENE_CACHE=1 npx midscene ./bing-search.yaml
+```
+
+## 缓存策略
+
+缓存内容会保存到 `./midscene_run/cache` 目录下，以 `.cache.yaml` 为扩展名。
+
+缓存内容分为两类：
+
+1. 任务规划结果，例如 `ai` 和 `aiAction` 方法的结果
+2. 元素定位后的 XPath 数据，例如 `.aiLocate`, `.aiTap` 等方法的结果
+
+查询类方法，例如 `aiBoolean`, `aiQuery`, `aiAssert` 的内容不会被缓存。
+
+如果缓存未命中，Midscene 将会重新调用 AI 模型，并更新缓存文件。
+
+## 常见问题
+
+### 如何检查缓存是否命中？
+
+你可以查看报告文件。如果缓存命中，你将看到 `cache` 提示，并且执行时间大幅降低。
+
+### 为什么在 CI 中无法命中缓存？
+
+你需要在 CI 中将缓存文件提交到仓库中，并再次检查缓存命中的条件。
+
+### 如果有了缓存，是否就不需要 AI 服务了？
+
+不是的。
+
+缓存是加速脚本执行的手段，但它不是确保脚本长期稳定执行的工具。我们注意到，当页面发生变化时，缓存可能会失效（例如当元素 DOM 结构发生变化时）。在缓存失效时，Midscene 仍然需要调用 AI 服务来重新执行任务。
+
+### 如何手动删除缓存？
+
+你可以删除缓存文件，或者编辑缓存文件的内容。

@@ -1,31 +1,42 @@
-import assert from 'node:assert';
 import { callAiFn } from '@/ai-model/common';
-import { AiExtractElementInfo, AiInspectElement } from '@/ai-model/index';
-import { AiAssert } from '@/ai-model/inspect';
+import { AiExtractElementInfo, AiLocateElement } from '@/ai-model/index';
+import { AiAssert, AiLocateSection } from '@/ai-model/inspect';
 import type {
   AIElementResponse,
   AISingleElementResponse,
+  AIUsageInfo,
   BaseElement,
+  DetailedLocateParam,
   DumpSubscriber,
   InsightAction,
   InsightAssertionResponse,
   InsightExtractParam,
   InsightOptions,
   InsightTaskInfo,
+  LocateResult,
   PartialInsightDumpFromSDK,
+  Rect,
   UIContext,
 } from '@/types';
+import {
+  MIDSCENE_FORCE_DEEP_THINK,
+  getAIConfigInBoolean,
+  vlLocateMode,
+} from '@midscene/shared/env';
+import { getDebug } from '@midscene/shared/logger';
+import { assert } from '@midscene/shared/utils';
 import { emitInsightDump } from './utils';
 
 export interface LocateOpts {
+  context?: UIContext<BaseElement>;
   callAI?: typeof callAiFn<AIElementResponse>;
-  quickAnswer?: Partial<AISingleElementResponse>;
 }
 
 export type AnyValue<T> = {
   [K in keyof T]: unknown extends T[K] ? any : T[K];
 };
 
+const debug = getDebug('ai:insight');
 export default class Insight<
   ElementType extends BaseElement = BaseElement,
   ContextType extends UIContext<ElementType> = UIContext<ElementType>,
@@ -37,8 +48,6 @@ export default class Insight<
   aiVendorFn: (...args: Array<any>) => Promise<any> = callAiFn;
 
   onceDumpUpdatedFn?: DumpSubscriber;
-
-  generateElement: InsightOptions['generateElement'];
 
   taskInfo?: Omit<InsightTaskInfo, 'durationMs'>;
 
@@ -55,8 +64,6 @@ export default class Insight<
       this.contextRetrieverFn = () => Promise.resolve(context);
     }
 
-    this.generateElement = opt?.generateElement;
-
     if (typeof opt?.aiVendorFn !== 'undefined') {
       this.aiVendorFn = opt.aiVendorFn;
     }
@@ -66,28 +73,68 @@ export default class Insight<
   }
 
   async locate(
-    queryPrompt: string,
+    query: DetailedLocateParam,
     opt?: LocateOpts,
-  ): Promise<ElementType | null>;
-  async locate(queryPrompt: string, opt?: LocateOpts) {
+  ): Promise<LocateResult> {
     const { callAI } = opt || {};
-    assert(
-      queryPrompt || opt?.quickAnswer,
-      'query or quickAnswer is required for locate',
-    );
+    const queryPrompt = typeof query === 'string' ? query : query.prompt;
+    assert(queryPrompt, 'query is required for locate');
     const dumpSubscriber = this.onceDumpUpdatedFn;
     this.onceDumpUpdatedFn = undefined;
-    const context = await this.contextRetrieverFn('locate');
+
+    assert(typeof query === 'object', 'query should be an object for locate');
+
+    const globalDeepThinkSwitch = getAIConfigInBoolean(
+      MIDSCENE_FORCE_DEEP_THINK,
+    );
+    if (globalDeepThinkSwitch) {
+      debug('globalDeepThinkSwitch', globalDeepThinkSwitch);
+    }
+    let searchAreaPrompt;
+    if (query.deepThink || globalDeepThinkSwitch) {
+      searchAreaPrompt = query.prompt;
+    }
+
+    if (searchAreaPrompt && !vlLocateMode()) {
+      console.warn(
+        'The "deepThink" feature is not supported with multimodal LLM. Please config VL model for Midscene. https://midscenejs.com/choose-a-model',
+      );
+      searchAreaPrompt = undefined;
+    }
+
+    const context = opt?.context || (await this.contextRetrieverFn('locate'));
+
+    let searchArea: Rect | undefined = undefined;
+    let searchAreaRawResponse: string | undefined = undefined;
+    let searchAreaUsage: AIUsageInfo | undefined = undefined;
+    let searchAreaResponse:
+      | Awaited<ReturnType<typeof AiLocateSection>>
+      | undefined = undefined;
+    if (searchAreaPrompt) {
+      searchAreaResponse = await AiLocateSection({
+        context,
+        sectionDescription: searchAreaPrompt,
+      });
+      assert(
+        searchAreaResponse.rect,
+        `cannot find search area for "${searchAreaPrompt}"${
+          searchAreaResponse.error ? `: ${searchAreaResponse.error}` : ''
+        }`,
+      );
+      searchAreaRawResponse = searchAreaResponse.rawResponse;
+      searchAreaUsage = searchAreaResponse.usage;
+      searchArea = searchAreaResponse.rect;
+    }
 
     const startTime = Date.now();
-    const { parseResult, elementById, rawResponse, usage } =
-      await AiInspectElement({
+    const { parseResult, rect, elementById, rawResponse, usage } =
+      await AiLocateElement({
         callAI: callAI || this.aiVendorFn,
         context,
         targetElementDescription: queryPrompt,
-        quickAnswer: opt?.quickAnswer,
+        searchConfig: searchAreaResponse,
       });
-    // const parseResult = await this.aiVendorFn<AIElementParseResponse>(msgs);
+
     const timeCost = Date.now() - startTime;
     const taskInfo: InsightTaskInfo = {
       ...(this.taskInfo ? this.taskInfo : {}),
@@ -95,38 +142,33 @@ export default class Insight<
       rawResponse: JSON.stringify(rawResponse),
       formatResponse: JSON.stringify(parseResult),
       usage,
+      searchArea,
+      searchAreaRawResponse,
+      searchAreaUsage,
     };
 
     let errorLog: string | undefined;
     if (parseResult.errors?.length) {
-      errorLog = `locate - AI response error: \n${parseResult.errors.join('\n')}`;
+      errorLog = `AI model failed to locate: \n${parseResult.errors.join('\n')}`;
     }
 
     const dumpData: PartialInsightDumpFromSDK = {
       type: 'locate',
-      context,
       userQuery: {
         element: queryPrompt,
       },
-      quickAnswer: opt?.quickAnswer,
-      matchedSection: [],
       matchedElement: [],
+      matchedRect: rect,
       data: null,
       taskInfo,
+      deepThink: !!searchArea,
       error: errorLog,
     };
 
-    const logId = emitInsightDump(dumpData, undefined, dumpSubscriber);
-
-    if (errorLog) {
-      console.error(errorLog);
-      throw new Error(errorLog);
-    }
-
     const elements: BaseElement[] = [];
-    parseResult.elements.forEach((item) => {
+    (parseResult.elements || []).forEach((item) => {
       if ('id' in item) {
-        const element = elementById(item.id);
+        const element = elementById(item?.id);
 
         if (!element) {
           console.warn(
@@ -143,20 +185,35 @@ export default class Insight<
         ...dumpData,
         matchedElement: elements,
       },
-      logId,
       dumpSubscriber,
     );
 
-    if (elements.length >= 2) {
-      console.warn(
-        `locate: multiple elements found, return the first one. (query: ${queryPrompt})`,
-      );
-      return elements[0];
+    if (errorLog) {
+      throw new Error(errorLog);
     }
+
+    assert(
+      elements.length <= 1,
+      `locate: multiple elements found, length = ${elements.length}`,
+    );
+
     if (elements.length === 1) {
-      return elements[0];
+      return {
+        element: {
+          id: elements[0]!.id,
+          indexId: elements[0]!.indexId,
+          center: elements[0]!.center,
+          rect: elements[0]!.rect,
+          xpaths: elements[0]!.xpaths || [],
+          attributes: elements[0]!.attributes,
+        },
+        rect,
+      };
     }
-    return null;
+    return {
+      element: null,
+      rect,
+    };
   }
 
   async extract<T = any>(input: string): Promise<T>;
@@ -195,33 +252,29 @@ export default class Insight<
 
     const dumpData: PartialInsightDumpFromSDK = {
       type: 'extract',
-      context,
       userQuery: {
         dataDemand,
       },
-      matchedSection: [],
       matchedElement: [],
       data: null,
       taskInfo,
       error: errorLog,
     };
-    const logId = emitInsightDump(dumpData, undefined, dumpSubscriber);
 
-    const { data } = parseResult;
-    if (errorLog && !data) {
-      console.error(errorLog);
-      throw new Error(errorLog);
-    }
+    const { data } = parseResult || {};
 
+    // 4
     emitInsightDump(
       {
         ...dumpData,
-        matchedSection: [],
         data,
       },
-      logId,
       dumpSubscriber,
     );
+
+    if (errorLog && !data) {
+      throw new Error(errorLog);
+    }
 
     return {
       data,
@@ -256,11 +309,9 @@ export default class Insight<
     const { thought, pass } = assertResult.content;
     const dumpData: PartialInsightDumpFromSDK = {
       type: 'assert',
-      context,
       userQuery: {
         assertion,
       },
-      matchedSection: [],
       matchedElement: [],
       data: null,
       taskInfo,
@@ -268,7 +319,7 @@ export default class Insight<
       assertionThought: thought,
       error: pass ? undefined : thought,
     };
-    emitInsightDump(dumpData, undefined, dumpSubscriber);
+    emitInsightDump(dumpData, dumpSubscriber);
 
     return {
       pass,

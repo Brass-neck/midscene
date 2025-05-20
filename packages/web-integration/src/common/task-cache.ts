@@ -1,301 +1,242 @@
-import { existsSync, readFileSync } from 'node:fs';
+import assert from 'node:assert';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AIElementIdResponse, PlanningAIResponse } from '@midscene/core';
-import type { vlmPlanning } from '@midscene/core/ai-model';
-import { getAIConfig } from '@midscene/core/env';
-import {
-  getLogDirByType,
-  stringifyDumpData,
-  writeLogFile,
-} from '@midscene/core/utils';
-import { getRunningPkgInfo } from '@midscene/shared/fs';
+import { getMidsceneRunSubDir } from '@midscene/shared/common';
+import { getDebug } from '@midscene/shared/logger';
 import { ifInBrowser } from '@midscene/shared/utils';
-import { type WebUIContext, generateCacheId } from './utils';
+import yaml from 'js-yaml';
+import semver from 'semver';
+import { version } from '../../package.json';
+import { replaceIllegalPathCharsAndSpace } from './utils';
 
-export type PlanTask = {
+const debug = getDebug('cache');
+
+export interface PlanningCache {
   type: 'plan';
   prompt: string;
-  pageContext: {
-    url: string;
-    size: {
-      width: number;
-      height: number;
-    };
-  };
-  response: PlanningAIResponse;
-};
+  yamlWorkflow: string;
+}
 
-export type UITarsPlanTask = {
-  type: 'ui-tars-plan';
-  prompt: string;
-  pageContext: {
-    url: string;
-    size: {
-      width: number;
-      height: number;
-    };
-  };
-  response: Awaited<ReturnType<typeof vlmPlanning>>;
-};
-
-export type LocateTask = {
+export interface LocateCache {
   type: 'locate';
   prompt: string;
-  pageContext: {
-    url: string;
-    size: {
-      width: number;
-      height: number;
-    };
-  };
-  response: AIElementIdResponse;
+  xpaths: string[];
+}
+
+export interface MatchCacheResult<T extends PlanningCache | LocateCache> {
+  cacheContent: T;
+  updateFn: (cb: (cache: T) => void) => void;
+}
+
+export type CacheFileContent = {
+  midsceneVersion: string;
+  cacheId: string;
+  caches: Array<PlanningCache | LocateCache>;
 };
 
-export type AiTasks = Array<PlanTask | LocateTask | UITarsPlanTask>;
-
-export type AiTaskCache = {
-  aiTasks: Array<{
-    prompt: string;
-    tasks: AiTasks;
-  }>;
-};
-
-export type CacheGroup = {
-  readCache: <T extends 'plan' | 'locate' | 'ui-tars-plan'>(
-    pageContext: WebUIContext,
-    type: T,
-    actionPrompt: string,
-  ) => T extends 'plan'
-    ? PlanTask['response']
-    : T extends 'locate'
-      ? LocateTask['response']
-      : UITarsPlanTask['response'];
-  saveCache: (cache: UITarsPlanTask | PlanTask | LocateTask) => void;
-};
+const lowestSupportedMidsceneVersion = '0.16.10';
+const cacheFileExt = '.cache.yaml';
 
 export class TaskCache {
-  cache: AiTaskCache;
-
   cacheId: string;
 
-  newCache: AiTaskCache;
+  cacheFilePath?: string;
 
-  midscenePkgInfo: ReturnType<typeof getRunningPkgInfo> | null;
+  cache: CacheFileContent;
 
-  constructor(opts?: { cacheId?: string }) {
-    this.midscenePkgInfo = getRunningPkgInfo();
-    this.cacheId = opts?.cacheId || '';
-    this.cache = this.readCacheFromFile() || {
-      aiTasks: [],
-    };
-    this.newCache = {
-      aiTasks: [],
-    };
-  }
+  isCacheResultUsed: boolean; // a flag to indicate if the cache result should be used
+  cacheOriginalLength: number;
 
-  getCacheGroupByPrompt(aiActionPrompt: string): CacheGroup {
-    const { aiTasks = [] } = this.cache || { aiTasks: [] };
-    const index = aiTasks.findIndex((item) => item.prompt === aiActionPrompt);
-    const newCacheGroup: AiTasks = [];
-    this.newCache.aiTasks.push({
-      prompt: aiActionPrompt,
-      tasks: newCacheGroup,
-    });
-    return {
-      readCache: <T extends 'plan' | 'locate' | 'ui-tars-plan'>(
-        pageContext: WebUIContext,
-        type: T,
-        actionPrompt: string,
-      ) => {
-        if (index === -1) {
-          return false as any;
-        }
-        if (type === 'plan') {
-          return this.readCache(
-            pageContext,
-            type,
-            actionPrompt,
-            aiTasks[index].tasks,
-          ) as PlanTask['response'];
-        }
-        if (type === 'ui-tars-plan') {
-          return this.readCache(
-            pageContext,
-            type,
-            actionPrompt,
-            aiTasks[index].tasks,
-          ) as UITarsPlanTask['response'];
-        }
+  private matchedCacheIndices: Set<string> = new Set(); // Track matched records
 
-        return this.readCache(
-          pageContext,
-          type,
-          actionPrompt,
-          aiTasks[index].tasks,
-        ) as T extends 'plan'
-          ? PlanTask['response']
-          : T extends 'locate'
-            ? LocateTask['response']
-            : UITarsPlanTask['response'];
-      },
-      saveCache: (cache: PlanTask | LocateTask | UITarsPlanTask) => {
-        newCacheGroup.push(cache);
-        this.writeCacheToFile();
-      },
-    };
-  }
-
-  /**
-   * Read and return cached responses asynchronously based on specific criteria
-   * This function is mainly used to read cached responses from a certain storage medium.
-   * It accepts three parameters: the page context information, the task type, and the user's prompt information.
-   * In the function, it first checks whether there is cached data. If there is, it retrieves the first task response from the cache.
-   * It then checks whether the task type is 'locate' and whether the corresponding element can be found in the new context.
-   * If the element cannot be found, it returns false, indicating that the cache is invalid.
-   * If the task type is correct and the user prompt matches, it checks whether the page context is the same.
-   * If the page context is the same, it returns the cached response, indicating that the cache hit is successful.
-   * If there is no cached data or the conditions are not met, the function returns false, indicating that no cache is available or the cache is not hit.
-   *
-   * @param pageContext UIContext<WebElementInfo> type, representing the context information of the current page
-   * @param type String type, specifying the task type, can be 'plan' or 'locate'
-   * @param userPrompt String type, representing user prompt information
-   * @return Returns a Promise object that resolves to a boolean or object
-   */
-  readCache(
-    pageContext: WebUIContext,
-    type: 'plan',
-    userPrompt: string,
-    cacheGroup: AiTasks,
-  ): PlanTask['response'];
-  readCache(
-    pageContext: WebUIContext,
-    type: 'ui-tars-plan',
-    userPrompt: string,
-    cacheGroup: AiTasks,
-  ): UITarsPlanTask['response'];
-  readCache(
-    pageContext: WebUIContext,
-    type: 'locate',
-    userPrompt: string,
-    cacheGroup: AiTasks,
-  ): LocateTask['response'];
-  readCache(
-    pageContext: WebUIContext,
-    type: 'plan' | 'locate' | 'ui-tars-plan',
-    userPrompt: string,
-    cacheGroup: AiTasks,
-  ):
-    | PlanTask['response']
-    | LocateTask['response']
-    | UITarsPlanTask['response']
-    | false {
-    if (cacheGroup.length > 0) {
-      const index = cacheGroup.findIndex((item) => item.prompt === userPrompt);
-
-      if (index === -1) {
-        return false;
-      }
-
-      const taskRes = cacheGroup.splice(index, 1)[0];
-
-      // The corresponding element cannot be found in the new context
-      if (
-        taskRes?.type === 'locate' &&
-        !taskRes.response?.elements.every((element) => {
-          const findIndex = pageContext.content.findIndex(
-            (contentElement) => contentElement.id === element.id,
-          );
-          if (findIndex === -1) {
-            return false;
-          }
-          return true;
-        })
-      ) {
-        return false;
-      }
-      if (
-        taskRes &&
-        taskRes.type === type &&
-        taskRes.prompt === userPrompt &&
-        this.pageContextEqual(taskRes.pageContext, pageContext)
-      ) {
-        return taskRes.response;
-      }
-    }
-    return false;
-  }
-
-  pageContextEqual(
-    taskPageContext: LocateTask['pageContext'],
-    pageContext: WebUIContext,
+  constructor(
+    cacheId: string,
+    isCacheResultUsed: boolean,
+    cacheFilePath?: string,
   ) {
-    return (
-      taskPageContext.size.width === pageContext.size.width &&
-      taskPageContext.size.height === pageContext.size.height
-    );
-  }
+    assert(cacheId, 'cacheId is required');
+    this.cacheId = replaceIllegalPathCharsAndSpace(cacheId);
 
-  /**
-   * Generate task cache data.
-   * This method is mainly used to create or obtain some cached data for tasks, and it returns a new cache object.
-   * In the cache object, it may contain task-related information, states, or other necessary data.
-   * It is assumed that the `newCache` property already exists in the current class or object and is a data structure used to store task cache.
-   * @returns {Object} Returns a new cache object, which may include task cache data.
-   */
-  generateTaskCache() {
-    return this.newCache;
-  }
+    this.cacheFilePath = ifInBrowser
+      ? undefined
+      : cacheFilePath ||
+        join(getMidsceneRunSubDir('cache'), `${this.cacheId}${cacheFileExt}`);
 
-  readCacheFromFile() {
-    if (ifInBrowser || !this.cacheId) {
-      return undefined;
+    this.isCacheResultUsed = isCacheResultUsed;
+
+    let cacheContent;
+    if (this.cacheFilePath) {
+      cacheContent = this.loadCacheFromFile();
     }
-    const cacheFile = join(getLogDirByType('cache'), `${this.cacheId}.json`);
-    if (getAIConfig('MIDSCENE_CACHE') === 'true' && existsSync(cacheFile)) {
-      try {
-        const data = readFileSync(cacheFile, 'utf8');
-        const jsonData = JSON.parse(data);
-        if (!this.midscenePkgInfo) {
-          return undefined;
-        }
-        const jsonDataPkgVersion = jsonData.pkgVersion.split('.');
-        const midscenePkgInfoPkgVersion =
-          this.midscenePkgInfo.version.split('.');
-        if (
-          jsonDataPkgVersion[0] !== midscenePkgInfoPkgVersion[0] ||
-          jsonDataPkgVersion[1] !== midscenePkgInfoPkgVersion[1]
-        ) {
-          return undefined;
-        }
-        return jsonData as AiTaskCache;
-      } catch (err) {
-        return undefined;
+    if (!cacheContent) {
+      cacheContent = {
+        midsceneVersion: version,
+        cacheId: this.cacheId,
+        caches: [],
+      };
+    }
+    this.cache = cacheContent;
+    this.cacheOriginalLength = this.cache.caches.length;
+  }
+
+  matchCache(
+    prompt: string,
+    type: 'plan' | 'locate',
+  ): MatchCacheResult<PlanningCache | LocateCache> | undefined {
+    // Find the first unused matching cache
+    for (let i = 0; i < this.cacheOriginalLength; i++) {
+      const item = this.cache.caches[i];
+      const key = `${type}:${prompt}:${i}`;
+      if (
+        item.type === type &&
+        item.prompt === prompt &&
+        !this.matchedCacheIndices.has(key)
+      ) {
+        this.matchedCacheIndices.add(key);
+        debug(
+          'cache found and marked as used, type: %s, prompt: %s, index: %d',
+          type,
+          prompt,
+          i,
+        );
+        return {
+          cacheContent: item,
+          updateFn: (cb: (cache: PlanningCache | LocateCache) => void) => {
+            debug(
+              'will call updateFn to update cache, type: %s, prompt: %s, index: %d',
+              type,
+              prompt,
+              i,
+            );
+            cb(item);
+            debug(
+              'cache updated, will flush to file, type: %s, prompt: %s, index: %d',
+              type,
+              prompt,
+              i,
+            );
+            this.flushCacheToFile();
+          },
+        };
       }
     }
+    debug('no unused cache found, type: %s, prompt: %s', type, prompt);
     return undefined;
   }
 
-  writeCacheToFile() {
-    const midscenePkgInfo = getRunningPkgInfo();
-    if (!midscenePkgInfo || !this.cacheId) {
+  matchPlanCache(prompt: string): MatchCacheResult<PlanningCache> | undefined {
+    return this.matchCache(prompt, 'plan') as
+      | MatchCacheResult<PlanningCache>
+      | undefined;
+  }
+
+  matchLocateCache(prompt: string): MatchCacheResult<LocateCache> | undefined {
+    return this.matchCache(prompt, 'locate') as
+      | MatchCacheResult<LocateCache>
+      | undefined;
+  }
+
+  appendCache(cache: PlanningCache | LocateCache) {
+    debug('will append cache', cache);
+    this.cache.caches.push(cache);
+    this.flushCacheToFile();
+  }
+
+  loadCacheFromFile() {
+    const cacheFile = this.cacheFilePath;
+    assert(cacheFile, 'cache file path is required');
+
+    if (!existsSync(cacheFile)) {
+      debug('no cache file found, path: %s', cacheFile);
+      return undefined;
+    }
+
+    // detect old cache file
+    const jsonTypeCacheFile = cacheFile.replace(cacheFileExt, '.json');
+    if (existsSync(jsonTypeCacheFile) && this.isCacheResultUsed) {
+      console.warn(
+        `An outdated cache file from an earlier version of Midscene has been detected. Since version 0.17, we have implemented an improved caching strategy. Please delete the old file located at: ${jsonTypeCacheFile}.`,
+      );
+      return undefined;
+    }
+
+    try {
+      const data = readFileSync(cacheFile, 'utf8');
+      const jsonData = yaml.load(data) as CacheFileContent;
+
+      if (!version) {
+        debug('no midscene version info, will not read cache from file');
+        return undefined;
+      }
+
+      if (
+        semver.lt(jsonData.midsceneVersion, lowestSupportedMidsceneVersion) &&
+        !jsonData.midsceneVersion.includes('beta') // for internal test
+      ) {
+        console.warn(
+          `You are using an old version of Midscene cache file, and we cannot match any info from it. Starting from Midscene v0.17, we changed our strategy to use xpath for cache info, providing better performance.\nPlease delete the existing cache and rebuild it. Sorry for the inconvenience.\ncache file: ${cacheFile}`,
+        );
+        return undefined;
+      }
+
+      debug(
+        'cache loaded from file, path: %s, cache version: %s, record length: %s',
+        cacheFile,
+        jsonData.midsceneVersion,
+        jsonData.caches.length,
+      );
+      jsonData.midsceneVersion = version; // update the version
+      return jsonData;
+    } catch (err) {
+      debug(
+        'cache file exists but load failed, path: %s, error: %s',
+        cacheFile,
+        err,
+      );
+      return undefined;
+    }
+  }
+
+  flushCacheToFile() {
+    if (!version) {
+      debug('no midscene version info, will not write cache to file');
       return;
     }
 
-    if (!ifInBrowser) {
-      writeLogFile({
-        fileName: `${this.cacheId}`,
-        fileExt: 'json',
-        fileContent: stringifyDumpData(
-          {
-            pkgName: midscenePkgInfo.name,
-            pkgVersion: midscenePkgInfo.version,
-            cacheId: this.cacheId,
-            ...this.newCache,
-          },
-          2,
-        ),
-        type: 'cache',
-      });
+    if (!this.cacheFilePath) {
+      debug('no cache file path, will not write cache to file');
+      return;
+    }
+
+    try {
+      const yamlData = yaml.dump(this.cache);
+      writeFileSync(this.cacheFilePath, yamlData);
+    } catch (err) {
+      debug(
+        'write cache to file failed, path: %s, error: %s',
+        this.cacheFilePath,
+        err,
+      );
+    }
+  }
+
+  updateOrAppendCacheRecord(
+    newRecord: PlanningCache | LocateCache,
+    cachedRecord?: MatchCacheResult<PlanningCache | LocateCache>,
+  ) {
+    if (cachedRecord) {
+      // update existing record
+      if (newRecord.type === 'plan') {
+        cachedRecord.updateFn((cache) => {
+          (cache as PlanningCache).yamlWorkflow = newRecord.yamlWorkflow;
+        });
+      } else {
+        cachedRecord.updateFn((cache) => {
+          (cache as LocateCache).xpaths = newRecord.xpaths;
+        });
+      }
+    } else {
+      this.appendCache(newRecord);
     }
   }
 }

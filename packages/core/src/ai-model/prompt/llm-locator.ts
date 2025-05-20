@@ -1,9 +1,12 @@
-import { MATCH_BY_POSITION, getAIConfigInBoolean } from '@/env';
 import { PromptTemplate } from '@langchain/core/prompts';
+import type { vlLocateMode } from '@midscene/shared/env';
 import type { ResponseFormatJSONSchema } from 'openai/resources';
-
-export function systemPromptToLocateElement() {
-  if (getAIConfigInBoolean(MATCH_BY_POSITION)) {
+import { bboxDescription } from './common';
+export function systemPromptToLocateElement(
+  vlMode: ReturnType<typeof vlLocateMode>,
+) {
+  if (vlMode) {
+    const bboxComment = bboxDescription(vlMode);
     return `
 ## Role:
 You are an expert in software testing.
@@ -15,7 +18,7 @@ You are an expert in software testing.
 ## Output Format:
 \`\`\`json
 {
-  "bbox": [number, number, number, number], 
+  "bbox": [number, number, number, number],  // ${bboxComment}
   "errors"?: string[]
 }
 \`\`\`
@@ -23,6 +26,22 @@ You are an expert in software testing.
 Fields:
 * \`bbox\` is the bounding box of the element that matches the user's description best in the screenshot
 * \`errors\` is an optional array of error messages (if any)
+
+For example, when an element is found:
+\`\`\`json
+{
+  "bbox": [100, 100, 200, 200],
+  "errors": []
+}
+\`\`\`
+
+When no element is found:
+\`\`\`json
+{
+  "bbox": [],
+  "errors": ["I can see ..., but {some element} is not found"]
+}
+\`\`\`
 `;
   }
 

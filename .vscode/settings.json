@@ -10,16 +10,29 @@
     "aweme",
     "bbox",
     "bytedance",
+    "deepseek",
     "doubao",
     "douyin",
+    "fkill",
     "httpbin",
     "iconfont",
+    "modelcontextprotocol",
+    "openrouter",
     "qwen",
     "taobao",
     "targetcreated",
+<<<<<<< HEAD
     "Volcengine"
   ],
   "[typescriptreact]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
+=======
+    "Volcengine",
+    "xpaths",
+    "Yadb"
+  ],
+  "[jsonc]": {
+    "editor.defaultFormatter": "biomejs.biome"
+>>>>>>> upstream/main
   }
 }
