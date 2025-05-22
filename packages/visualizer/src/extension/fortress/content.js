@@ -2,8 +2,9 @@
 let curPort = null;
 const NodeType = {
   StartNode: 'startNode', // 开始
-  Keyboard: 'keyboardNode', // 触发键盘
+  OldStartNode: 'oldStartNode', // 开始
   ElementClick: 'elementClickNode', // 点击元素
+  Keyboard: 'keyboardNode', // 触发键盘
   Delay: 'delayNode', // 延迟
   JumpUrl: 'jumpUrlNode', // 打开网页
   ReloadUrl: 'reloadUrlNode', // 刷新网页
@@ -11,9 +12,16 @@ const NodeType = {
   ElementHover: 'ElementHoverNode', // 元素悬停
   InputText: 'InputTextNode', // 输入文字
   HttpRequest: 'HttpRequestNode', // http请求
+  AccessPart: 'AccessPartNode', // 切换接入方
+  Expect: 'ExpectNode', // 断言
   WhiteScreen: 'WhiteScreenNode', // 白屏检测
   AINode: 'AINode', // AI节点
+  EnvNode: 'envNode', // 环境设置
+  UrlDynamicFetchNode: 'urlDynamicFetchNode', // 动态获取url
+  NoticeNode: 'noticeNode', // 通知
   EndNode: 'endNode', // 结束
+  PicDiff: 'PicDiffNode', // 图片对比
+  DeviceNode: 'deviceNode', // 设备设置
   // AccessPart: 'AccessPartNode', // 切换接入方
 };
 
@@ -577,31 +585,31 @@ async function pressKey({ ele, keys, pressTime = 0 }) {
 
 const handleUidl = (uidl) => {
   const { nodes } = uidl;
-  const newNodes = nodes.reduce((prev, next) => {
-    if (next.type === NodeType.WhiteScreen) {
-      const jumpNodes = (next.data.formData?.whiteScreen || []).map((i) => ({
-        ...next,
-        type: NodeType.JumpUrl,
-        data: {
-          formData: {
-            pageUrl: i.url,
-            delay: i.delay,
-          },
-        },
-      }));
-      prev.push(...jumpNodes);
-    } else {
-      prev.push(next);
-    }
+  // const newNodes = nodes.reduce((prev, next) => {
+  //   if (next.type === NodeType.WhiteScreen) {
+  //     const jumpNodes = (next.data.formData?.whiteScreen || []).map((i) => ({
+  //       ...next,
+  //       type: NodeType.JumpUrl,
+  //       data: {
+  //         formData: {
+  //           pageUrl: i.url,
+  //           delay: i.delay,
+  //         },
+  //       },
+  //     }));
+  //     prev.push(...jumpNodes);
+  //   } else {
+  //     prev.push(next);
+  //   }
 
-    return prev;
-  }, []);
+  //   return prev;
+  // }, []);
 
-  console.log('debug handleUidl newNodes', newNodes);
+  console.log('debug handleUidl newNodes', nodes);
 
   return {
     ...uidl,
-    nodes: newNodes,
+    nodes: nodes,
   };
 };
 
@@ -770,7 +778,7 @@ const handleResolve = (isDone = false, outResolveFn) => {
   outResolve = null;
 };
 
-const excuteNode = async (node, index, uidl, tabId, extra) => {
+const excuteNode = async (node, index, uidl, tabId, extra, context) => {
   chrome.runtime.sendMessage({
     type: 'fortress:excuteNode',
     data: {
@@ -788,9 +796,9 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
   await new Promise(async (resolve, reject) => {
     try {
       let ele;
+      console.log('debug start excute node', type, formData);
       switch (type) {
-        case NodeType.StartNode:
-          console.log('debug StartNode formData', formData);
+        case NodeType.OldStartNode:
           if (formData?.accessPartId) {
             switch (formData?.accessPartType) {
               case 'session_manage':
@@ -889,6 +897,8 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
                 ...uidl,
                 nodes: [startNode, ...uidl?.nodes?.slice?.(1)],
                 excuteRecord,
+                pageUrl: startNode.data.formData.pageUrl,
+                tabId,
               },
             });
             await awaitTime(3000);
@@ -909,6 +919,43 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           } else {
             excuteRecord.passCaseNum++;
           }
+          const cookieKey = formData.cookieKey;
+          const cookieValue = formData.cookieValue;
+          if (cookieKey && cookieValue) {
+            curPort.postMessage({
+              type: 'fortress:updatecookie',
+              data: {
+                ...uidl,
+                excuteRecord,
+                cookieKey,
+                cookieValue,
+                tabId,
+              },
+            });
+            await awaitTime(1000);
+          }
+
+          excuteRecord.passCaseNum++;
+          break;
+        case NodeType.StartNode:
+          excuteRecord.passCaseNum++;
+          break;
+        case NodeType.EnvNode:
+          const envCookieKey = formData.cookieKey;
+          const envCookieValue = formData.cookieValue;
+          curPort.postMessage({
+            type: 'fortress:updatecookie',
+            data: {
+              ...uidl,
+              excuteRecord,
+              envCookieKey,
+              envCookieValue,
+              tabId,
+            },
+          });
+          await awaitTime(1000);
+          excuteRecord.passCaseNum++;
+          console.log('debug update cookie', cookieKey, cookieValue);
           break;
         case NodeType.AINode:
           function sendMessageAsync() {
@@ -983,44 +1030,41 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
           });
           break;
         case NodeType.JumpUrl:
-          excuteRecord.passCaseNum++;
           await chrome.storage.local.set({ fortressContentLoaded: 0 });
+          let pageUrl = formData.pageUrl;
+          if (context.page_url) {
+            pageUrl = context.page_url;
+          }
+          console.log('debug jump url', pageUrl);
           await awaitTime(1000);
           curPort.postMessage({
             type: 'fortress:updateurl',
             data: {
               ...uidl,
-              nodes: [
-                {
-                  data: {
-                    formData: {
-                      pageUrl: formData.pageUrl,
-                      delay: formData.delay,
-                    },
-                  },
-                },
-                ...uidl?.nodes?.slice?.(index + 1),
-              ],
+              nodes: [...uidl?.nodes?.slice?.(index + 1)],
               excuteRecord,
+              pageUrl,
+              tabId,
             },
           });
+          await awaitTime(3000);
+          excuteRecord.passCaseNum++;
           console.log('debug port', curPort);
           break;
         case NodeType.ReloadUrl:
-          excuteRecord.passCaseNum++;
           await chrome.storage.local.set({ fortressContentLoaded: 0 });
           await awaitTime(1000);
           curPort.postMessage({
             type: 'fortress:updateurl',
             data: {
               ...uidl,
-              nodes: [
-                { data: { formData: { pageUrl: location.href } } },
-                ...uidl?.nodes?.slice?.(index + 1),
-              ],
+              nodes: [...uidl?.nodes?.slice?.(index + 1)],
               excuteRecord,
+              pageUrl: location.href,
+              tabId,
             },
           });
+          excuteRecord.passCaseNum++;
           console.log('debug port', curPort);
           break;
         case NodeType.HttpRequest:
@@ -1041,6 +1085,32 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
             headers,
             body: JSON.stringify(body),
           });
+          excuteRecord.passCaseNum++;
+          break;
+        case NodeType.UrlDynamicFetchNode:
+          console.log('debug UrlDynamicFetchNode');
+          const url = await fetch(
+            'https://pipe.bytedance.net/data/api/scene/run?scene_id=21012624',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'oauth-token': 'atReabgUvfahWdelzQns',
+              },
+              body: JSON.stringify({
+                UUID: '3404542770686891',
+                entrance: 'IM1128-1',
+                uuid: '3404542770686891',
+              }),
+            },
+          )
+            .then((res) => res.json())
+            .then((res) => res.URL)
+            .catch((error) => {
+              console.error('Error during fetch:', error);
+            });
+          console.log('debug UrlDynamicFetchNode end', url);
+          context['page_url'] = url;
           excuteRecord.passCaseNum++;
           break;
         case NodeType.InputText:
@@ -1087,13 +1157,17 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
       resolve();
     } finally {
       excuteRecord.totalCaseNum++;
+      const noNeedPreviewNodeTypes = [NodeType.PicDiff];
+      if (noNeedPreviewNodeTypes.includes(type)) {
+        excuteRecord.totalCaseNum--;
+      }
     }
   });
 };
 
 const excuteWorkflow = async (uidl, tabId, extra) => {
   excuteRecord.times++;
-
+  let context = {};
   const { nodes } = uidl;
 
   const AINodeNum = nodes.reduce((prev, next) => {
@@ -1110,13 +1184,18 @@ const excuteWorkflow = async (uidl, tabId, extra) => {
 
   for (let i = 0; i < nodes.length; i++) {
     console.log('debug start excuteNode', nodes[i], i);
+    const startTime = Date.now();
     try {
-      await excuteNode(nodes[i], i, uidl, tabId, extra);
+      await excuteNode(nodes[i], i, uidl, tabId, extra, context);
     } catch (e) {
-      console.error(e);
+      console.error('debug error executing promise:', e);
     }
+    console.log(
+      'debug execute node cost:',
+      nodes[i].type,
+      Date.now() - startTime,
+    );
   }
-
   console.log('debug 执行信息', excuteRecord);
 };
 
@@ -1240,6 +1319,7 @@ console.log('debug load contentjs', location);
       console.log('debug onMessage', type, uidl, tabId);
 
       if (type === 'fortress:excute') {
+        console.log('debug fortress:excute receive');
         if (record) {
           // 继承执行记录
           excuteRecord = record;
@@ -1247,8 +1327,12 @@ console.log('debug load contentjs', location);
         // 清除缓存
         // clearStorage();
 
-        // 执行用例计划
-        await excuteWorkflow(handleUidl(uidl), tabId, uidl?.extra);
+        try {
+          // 执行用例计划
+          await excuteWorkflow(handleUidl(uidl), tabId, uidl?.extra);
+        } catch (e) {
+          console.error('debug excuteWorkflow error', e);
+        }
 
         await new Promise((resolve) => {
           setTimeout(async () => {

@@ -29,15 +29,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import Blackboard from './blackboard';
 import { iconForStatus } from './misc';
-import Player from './player';
+import { Player } from './player';
 import DemoData from './playground-demo-ui-context.json';
 import type { ReplayScriptsInfo } from './replay-scripts';
 import { allScriptsFromDump } from './replay-scripts';
 import './playground-component.less';
-import Logo from './logo';
+import { Logo } from './logo';
 import { serverBase, useServerValid } from './open-in-playground';
 
-import { overrideAIConfig } from '@midscene/core/env';
+import { overrideAIConfig } from '@midscene/shared/env';
 import {
   ERROR_CODE_NOT_IMPLEMENTED_AS_DESIGNED,
   StaticPage,
@@ -46,13 +46,13 @@ import {
 import type { WebUIContext } from '@midscene/web/utils';
 import type { MenuProps } from 'antd';
 import { EnvConfig } from './env-config';
-import { type HistoryItem, useChromeTabInfo, useEnvConfig } from './store';
+import { useEnvConfig } from './store';
 
 import {
   ChromeExtensionProxyPage,
   ChromeExtensionProxyPageAgent,
 } from '@midscene/web/chrome-extension';
-import { buildYaml } from '@midscene/web/yaml';
+// import { buildYaml } from '@midscene/web/yaml';
 
 import yaml from 'js-yaml';
 // import ButtonGroup from 'antd/es/button/button-group';
@@ -111,7 +111,7 @@ export const useStaticPageAgent = (
   return agent;
 };
 
-const useHistorySelector = (onSelect: (history: HistoryItem) => void) => {
+const useHistorySelector = (onSelect: (history) => void) => {
   const history = useEnvConfig((state) => state.history);
   const clearHistory = useEnvConfig((state) => state.clearHistory);
 
@@ -216,7 +216,7 @@ export function Playground({
   const [curStep, setCurStep] = useState(0);
   const [result, setResult] = useState<(PlaygroundResult | null)[]>([]);
   const [verticalMode, setVerticalMode] = useState(false);
-  const { tabUrl } = useChromeTabInfo();
+  // const { tabUrl } = useChromeTabInfo();
   const [form] = Form.useForm();
   const {
     config,
@@ -780,66 +780,22 @@ export function Playground({
     </div>
   );
 
-  const history = useEnvConfig((state) => state.history);
-  const lastHistory = history[0];
-  const historyInitialValues = useMemo(
-    () => ({
-      type: lastHistory?.type || 'aiAction',
-      prompt: lastHistory?.prompt || '',
-    }),
-    [],
-  );
-
-  async function copyCode(format: 'js' | 'yaml') {
-    try {
-      const stepContent = [];
-      const fullValue = form.getFieldsValue();
-      for (let i = 0; i < stepCount; i++) {
-        const type = fullValue[`type-${i}`];
-        const prompt = fullValue[`prompt-${i}`];
-        if (!prompt) {
-          continue;
-        }
-        if (format === 'yaml') {
-          stepContent.push({ [type]: prompt });
-        } else if (format === 'js') {
-          stepContent.push(`await ${type}('${prompt}');`);
-        }
-      }
-      if (stepContent.length) {
-        let text = '';
-        if (format === 'yaml') {
-          text = buildYaml(
-            {
-              url: tabUrl || '',
-            },
-            [
-              {
-                name: 'aiAction',
-                flow: stepContent as { [type: string]: string }[],
-              },
-            ],
-          );
-        } else if (format === 'js') {
-          text = stepContent.join('\n');
-        }
-        await navigator.clipboard.writeText(text);
-        message.success('Copy success');
-      } else {
-        message.info('No code to copy');
-      }
-    } catch (error) {
-      message.success('Copy failed');
-      console.error('Copy failed:', error);
-    }
-  }
+  // const history = useEnvConfig((state) => state.history);
+  // const lastHistory = history[0];
+  // const historyInitialValues = useMemo(
+  //   () => ({
+  //     type: lastHistory?.type || 'aiAction',
+  //     prompt: lastHistory?.prompt || '',
+  //   }),
+  //   [],
+  // );
 
   // const [hoveringSettings, setHoveringSettings] = useState(false);
   const formSection = (
     <Form
       form={form}
       // onFinish={handleRun}
-      initialValues={{ ...historyInitialValues }}
+      // initialValues={{ ...historyInitialValues }}
     >
       <div className="playground-form-container">
         <div className="form-part">

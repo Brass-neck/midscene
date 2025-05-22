@@ -2,15 +2,8 @@ import path from 'node:path';
 import { defineConfig, moduleTools } from '@modern-js/module-tools';
 import { modulePluginNodePolyfill } from '@modern-js/plugin-module-node-polyfill';
 import { version } from './package.json';
-const externals = [
-  'playwright',
-  'bufferutil',
-  'utf-8-validate',
-  'antd',
-  '@ant-design/icons',
-  'react',
-  'react-dom',
-];
+const externals = ['playwright', 'bufferutil', 'utf-8-validate'];
+
 
 const commonConfig = {
   asset: {
@@ -18,7 +11,7 @@ const commonConfig = {
   },
   autoExternal: false,
   externals: [...externals],
-  target: 'es2020',
+  target: 'es2018',
   minify: process.env.CI
     ? {
         compress: true,
@@ -36,9 +29,13 @@ export default defineConfig({
       alias: {
         async_hooks: path.join(__dirname, './src/blank_polyfill.ts'),
       },
+      format: 'umd',
       dts: false,
       input: {
         index: 'src/index.tsx',
+      },
+      umdModuleName: (path) => {
+        return 'midsceneVisualizer';
       },
       platform: 'browser',
       outDir: 'dist',
