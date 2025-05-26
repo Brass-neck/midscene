@@ -892,8 +892,10 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
               },
             });
             await awaitTime(3000);
-            const cookieKey = formData.cookieKey;
-            const cookieValue = formData.cookieValue;
+          }
+          const cookieKey = formData.cookieKey;
+          const cookieValue = formData.cookieValue;
+          if (cookieKey && cookieValue) {
             curPort.postMessage({
               type: 'fortress:updatecookie',
               data: {
@@ -905,10 +907,9 @@ const excuteNode = async (node, index, uidl, tabId, extra) => {
               },
             });
             await awaitTime(1000);
-            excuteRecord.passCaseNum++;
-          } else {
-            excuteRecord.passCaseNum++;
           }
+
+          excuteRecord.passCaseNum++;
           break;
         case NodeType.AINode:
           function sendMessageAsync() {

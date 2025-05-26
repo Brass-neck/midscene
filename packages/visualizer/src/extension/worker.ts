@@ -163,18 +163,24 @@ function saveCookies(url: string): Promise<chrome.cookies.Cookie[]> {
     });
   });
 }
+
+let updateCookieName: string[] = [];
+
 // 修改Cookie
 function modifyCookies(
   url: string,
-  modifications: { name: string; value: string; domain: string }[],
+  modifications: { name: string; value: string; domain: string; path: '/' }[],
 ) {
   modifications.forEach((modification) => {
+    // 删除旧的
+    chrome.cookies.remove({ url, name: modification.name });
     chrome.cookies.set(
       {
         url,
         name: modification.name,
         value: modification.value,
         domain: modification.domain,
+        path: modification.path,
         expirationDate: new Date().getTime() / 1000 + 3600, // 设置1小时后过期
       },
       (cookie) => {
@@ -185,17 +191,23 @@ function modifyCookies(
         }
       },
     );
+    updateCookieName.push(modification.name);
   });
 }
 // 恢复Cookie
 function restoreCookies(url: string, originalCookies: chrome.cookies.Cookie[]) {
-  originalCookies.forEach((cookie) => {
+  updateCookieName.forEach((name) => {
+    const cookie = originalCookies.find((i) => i.name === name);
+    if (!cookie) {
+      return;
+    }
     chrome.cookies.set(
       {
         url,
         name: cookie.name,
         value: cookie.value,
         domain: cookie.domain,
+        path: cookie.path,
         expirationDate: cookie.expirationDate,
       },
       (cookie) => {
@@ -277,10 +289,38 @@ chrome.runtime.onConnect.addListener(async (port) => {
               curTabPageUrl.match(
                 /[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,6}/,
               )?.[0] ?? '';
-            // 修改Cookie
-            modifyCookies(curTabPageUrl, [
-              { name: cookieKey, value: cookieValue, domain },
-            ]);
+            const isFullCookie = [
+              'cookie',
+              'Cookie',
+              'cookies',
+              'Cookies',
+            ].includes(cookieKey);
+            if (isFullCookie) {
+              const cookiesKVs: { name: string; value: string }[] = cookieValue
+                .replace(/\\ /g, '')
+                .split(';')
+                .filter(Boolean)
+                .reduce((pre: { name: string; value: string }[], cur: string) => {
+                  const key = cur.split('=')[0];
+                  const value = cur.split('=')[1];
+                  pre.push({ name: key.trim(), value: value.trim() });
+                  return pre;
+                }, []);
+              // 修改Cookie
+              modifyCookies(
+                curTabPageUrl,
+                cookiesKVs.map((i) => ({
+                  ...i,
+                  domain,
+                  path: '/',
+                })),
+              );
+            } else {
+              // 修改Cookie
+              modifyCookies(curTabPageUrl, [
+                { name: cookieKey, value: cookieValue, domain, path: '/' },
+              ]);
+            }
           })
           .catch((error) => {
             console.error('Error saving cookies:', error);
