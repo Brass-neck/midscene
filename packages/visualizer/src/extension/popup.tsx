@@ -5,12 +5,12 @@ import { setSideEffect } from '../init';
 import './popup.less';
 
 import { globalThemeConfig } from '@/component/color';
-import Logo from '@/component/logo';
+import {Logo} from '@/component/logo';
 import {
   Playground,
   extensionAgentForTab,
 } from '@/component/playground-component';
-import { useEnvConfig } from '@/component/store';
+import { useEnvConfig } from '@/component/store/store';
 import { ApiOutlined, SendOutlined } from '@ant-design/icons';
 import Bridge from './bridge';
 import { getExtensionVersion } from './utils';
