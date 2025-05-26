@@ -3,11 +3,20 @@
   "description": "Open-source SDK for automating web pages using natural language through AI.",
   "version": "0.38",
   "manifest_version": 3,
-  "permissions": ["activeTab", "tabs", "sidePanel", "debugger", "storage"],
   "incognito": "split",
   "background": {
     "service_worker": "./lib/worker.js"
   },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "sidePanel",
+    "debugger",
+    "storage",
+    "cookies",
+    "https://*/*",
+    "https://pipe.bytedance.net/*"
+  ],
   "content_scripts": [
     {
       "js": ["./lib/browser-polyfill.js", "./lib/content.js"],
@@ -24,6 +33,13 @@
   },
   "side_panel": {
     "default_path": "./pages/sidepanel.html"
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://fortress.bytedance.net/*",
+      "https://csp.tiktok-row.net/fortress/*",
+      "http://localhost:8080/*"
+    ]
   },
   "icons": {
     "128": "icon128.png"
