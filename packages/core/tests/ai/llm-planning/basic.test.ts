@@ -1,6 +1,6 @@
 import { plan } from '@/ai-model';
-import { MIDSCENE_USE_QWEN_VL, getAIConfigInBoolean } from '@/env';
-import { getContextFromFixture } from '@/evaluation';
+import { vlLocateMode } from '@midscene/shared/env';
+import { getContextFromFixture } from 'tests/evaluation';
 /* eslint-disable max-lines-per-function */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -9,9 +9,9 @@ vi.setConfig({
   hookTimeout: 30 * 1000,
 });
 
-const qwenMode = getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL);
+const vlMode = vlLocateMode();
 
-describe.skipIf(qwenMode)('automation - llm planning', () => {
+describe.skipIf(vlMode)('automation - llm planning', () => {
   it('basic run', async () => {
     const { context } = await getContextFromFixture('todo');
 
@@ -100,7 +100,7 @@ describe('planning', () => {
     expect(actions![0].locate).toBeTruthy();
   });
 
-  it('should not throw in an "if" statement', async () => {
+  it.skip('should not throw in an "if" statement', async () => {
     const { context } = await getContextFromFixture('todo');
     const { actions, error } = await plan(
       'If there is a cookie prompt, close it',

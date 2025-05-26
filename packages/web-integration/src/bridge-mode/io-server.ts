@@ -1,4 +1,8 @@
+import { sleep } from '@midscene/core/utils';
+import { logMsg } from '@midscene/shared/utils';
 import { Server, type Socket as ServerSocket } from 'socket.io';
+import { io as ClientIO, type Socket as ClientSocket } from 'socket.io-client';
+
 import {
   type BridgeCall,
   type BridgeCallResponse,
@@ -6,9 +10,28 @@ import {
   type BridgeConnectedEventPayload,
   BridgeErrorCodeNoClientConnected,
   BridgeEvent,
+  BridgeSignalKill,
+  DefaultBridgeServerPort,
 } from './common';
 
 declare const __VERSION__: string;
+
+export const killRunningServer = async (port?: number) => {
+  try {
+    const client = ClientIO(
+      `ws://localhost:${port || DefaultBridgeServerPort}`,
+      {
+        query: {
+          [BridgeSignalKill]: 1,
+        },
+      },
+    );
+    await sleep(100);
+    await client.close();
+  } catch (e) {
+    // console.error('failed to kill port', e);
+  }
+};
 
 // ws server, this is where the request is sent
 export class BridgeServer {
@@ -16,6 +39,7 @@ export class BridgeServer {
   private io: Server | null = null;
   private socket: ServerSocket | null = null;
   private listeningTimeoutId: NodeJS.Timeout | null = null;
+  private listeningTimerFlag = false;
   private connectionTipTimer: NodeJS.Timeout | null = null;
   public calls: Record<string, BridgeCall> = {};
 
@@ -26,33 +50,70 @@ export class BridgeServer {
     public port: number,
     public onConnect?: () => void,
     public onDisconnect?: (reason: string) => void,
+    public closeConflictServer?: boolean,
   ) {}
 
-  async listen(timeout = 30000): Promise<void> {
+  async listen(
+    opts: {
+      timeout?: number | false;
+    } = {},
+  ): Promise<void> {
+    const { timeout = 30000 } = opts;
+
+    if (this.closeConflictServer) {
+      await killRunningServer(this.port);
+    }
+
     return new Promise((resolve, reject) => {
-      if (this.listeningTimeoutId) {
+      if (this.listeningTimerFlag) {
         return reject(new Error('already listening'));
       }
+      this.listeningTimerFlag = true;
 
-      this.listeningTimeoutId = setTimeout(() => {
-        reject(
-          new Error(
-            `no extension connected after ${timeout}ms (${BridgeErrorCodeNoClientConnected})`,
-          ),
-        );
-      }, timeout);
+      this.listeningTimeoutId = timeout
+        ? setTimeout(() => {
+            reject(
+              new Error(
+                `no extension connected after ${timeout}ms (${BridgeErrorCodeNoClientConnected})`,
+              ),
+            );
+          }, timeout)
+        : null;
 
       this.connectionTipTimer =
-        timeout > 3000
+        !timeout || timeout > 3000
           ? setTimeout(() => {
-              console.log('waiting for bridge to connect...');
+              logMsg('waiting for bridge to connect...');
             }, 2000)
           : null;
-
       this.io = new Server(this.port, {
         maxHttpBufferSize: 100 * 1024 * 1024, // 100MB
       });
+
+      // Listen for the native HTTP server 'listening' event
+      this.io.httpServer.once('listening', () => {
+        resolve();
+      });
+
+      this.io.httpServer.once('error', (err: Error) => {
+        reject(new Error(`Bridge Listening Error: ${err.message}`));
+      });
+
+      this.io.use((socket, next) => {
+        if (this.socket) {
+          next(new Error('server already connected by another client'));
+        }
+        next();
+      });
+
       this.io.on('connection', (socket) => {
+        // check the connection url
+        const url = socket.handshake.url;
+        if (url.includes(BridgeSignalKill)) {
+          console.warn('kill signal received, closing bridge server');
+          return this.close();
+        }
+
         this.connectionLost = false;
         this.connectionLostReason = '';
         this.listeningTimeoutId && clearTimeout(this.listeningTimeoutId);
@@ -61,17 +122,20 @@ export class BridgeServer {
         this.connectionTipTimer = null;
         if (this.socket) {
           socket.emit(BridgeEvent.Refused);
+          // close the socket
+          socket.disconnect();
+
           return reject(
             new Error('server already connected by another client'),
           );
         }
 
         try {
-          // console.log('one client connected');
+          logMsg('one client connected');
           this.socket = socket;
 
           const clientVersion = socket.handshake.query.version;
-          console.log(
+          logMsg(
             `Bridge connected, cli-side version v${__VERSION__}, browser-side version v${clientVersion}`,
           );
 
@@ -125,12 +189,14 @@ export class BridgeServer {
               }
             });
           }, 0);
-
-          resolve();
         } catch (e) {
           console.error('failed to handle connection event', e);
           reject(e);
         }
+      });
+
+      this.io.on('close', () => {
+        this.close();
       });
     });
   }
@@ -186,10 +252,7 @@ export class BridgeServer {
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        console.log(
-          `bridge call timeout, id=${id}, method=${method}, args=`,
-          args,
-        );
+        logMsg(`bridge call timeout, id=${id}, method=${method}, args=`, args);
         this.calls[id].error = new Error(
           `Bridge call timeout after ${timeout}ms: ${method}`,
         );
@@ -216,10 +279,13 @@ export class BridgeServer {
     });
   }
 
-  close() {
+  // do NOT restart after close
+  async close() {
     this.listeningTimeoutId && clearTimeout(this.listeningTimeoutId);
     this.connectionTipTimer && clearTimeout(this.connectionTipTimer);
-    this.io?.close();
+    const closeProcess = this.io?.close();
     this.io = null;
+
+    return closeProcess;
   }
 }

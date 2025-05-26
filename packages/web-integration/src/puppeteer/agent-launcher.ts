@@ -1,23 +1,29 @@
-import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { getDebug } from '@midscene/shared/logger';
+import { assert } from '@midscene/shared/utils';
 
-import { PuppeteerAgent } from '@/puppeteer';
-import type { MidsceneYamlScriptEnv } from '@midscene/core';
+import { PuppeteerAgent } from '@/puppeteer/index';
+import type { MidsceneYamlScriptWebEnv } from '@midscene/core';
+import { DEFAULT_WAIT_FOR_NETWORK_IDLE_TIMEOUT } from '@midscene/shared/constants';
+import puppeteer from 'puppeteer';
 
 export const defaultUA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
 export const defaultViewportWidth = 1440;
 export const defaultViewportHeight = 768;
 export const defaultViewportScale = process.platform === 'darwin' ? 2 : 1;
-export const defaultWaitForNetworkIdleTimeout = 6 * 1000;
+export const defaultWaitForNetworkIdleTimeout =
+  DEFAULT_WAIT_FOR_NETWORK_IDLE_TIMEOUT;
 
 interface FreeFn {
   name: string;
   fn: () => void;
 }
 
+const launcherDebug = getDebug('puppeteer:launcher');
+
 export async function launchPuppeteerPage(
-  target: MidsceneYamlScriptEnv,
+  target: MidsceneYamlScriptWebEnv,
   preference?: {
     headed?: boolean;
     keepWindow?: boolean;
@@ -79,21 +85,34 @@ export async function launchPuppeteerPage(
       'you are probably running headed mode in CI, this will usually fail.',
     );
   }
-  const puppeteer = await import('puppeteer');
   // do not use 'no-sandbox' on windows https://www.perplexity.ai/search/how-to-solve-this-with-nodejs-dMHpdCypRa..JA8TkQzbeQ
   const isWindows = process.platform === 'win32';
+  const args = [
+    ...(isWindows ? [] : ['--no-sandbox', '--disable-setuid-sandbox']),
+    '--disable-features=HttpsFirstBalancedModeAutoEnable',
+    '--disable-features=PasswordLeakDetection',
+    '--disable-save-password-bubble',
+    `--user-agent="${ua}"`,
+    preferMaximizedWindow
+      ? '--start-maximized'
+      : `--window-size=${width},${height + 200}`, // add 200px for the address bar
+  ];
+
+  launcherDebug(
+    'launching browser with viewport, headed',
+    headed,
+    'viewport',
+    viewportConfig,
+    'args',
+    args,
+    'preference',
+    preference,
+  );
   const browser = await puppeteer.launch({
     headless: !headed,
     defaultViewport: viewportConfig,
-    args: [
-      ...(isWindows ? [] : ['--no-sandbox', '--disable-setuid-sandbox']),
-      '--disable-features=PasswordLeakDetection',
-      '--disable-save-password-bubble',
-      `--user-agent="${ua}"`,
-      preferMaximizedWindow
-        ? '--start-maximized'
-        : `--window-size=${width},${height}`,
-    ],
+    args,
+    acceptInsecureCerts: target.acceptInsecureCerts,
   });
   freeFn.push({
     name: 'puppeteer_browser',
@@ -126,8 +145,10 @@ export async function launchPuppeteerPage(
       : defaultWaitForNetworkIdleTimeout;
 
   try {
+    launcherDebug('goto', target.url);
     await page.goto(target.url);
     if (waitForNetworkIdleTimeout > 0) {
+      launcherDebug('waitForNetworkIdle', waitForNetworkIdleTimeout);
       await page.waitForNetworkIdle({
         timeout: waitForNetworkIdleTimeout,
       });
@@ -151,7 +172,7 @@ export async function launchPuppeteerPage(
 }
 
 export async function puppeteerAgentForTarget(
-  target: MidsceneYamlScriptEnv,
+  target: MidsceneYamlScriptWebEnv,
   preference?: {
     headed?: boolean;
     keepWindow?: boolean;
@@ -166,6 +187,7 @@ export async function puppeteerAgentForTarget(
     autoPrintReportMsg: false,
     testId: preference?.testId,
     cacheId: preference?.cacheId,
+    aiActionContext: target.aiActionContext,
     forceSameTabNavigation:
       typeof target.forceSameTabNavigation !== 'undefined'
         ? target.forceSameTabNavigation

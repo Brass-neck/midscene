@@ -1,10 +1,10 @@
 import type { ThemeConfig } from 'antd';
 
 // https://coolors.co/palettes/popular/#01204e
-const sectionColor = ['#028391'];
+// const sectionColor = ['#028391'];
 // const elementColor = ['#fb6107'];
 const elementColor = ['#01204E'];
-const highlightColorForSection = '#01204E';
+const highlightColorForSearchArea = '#028391';
 const highlightColorForElement = '#fd5907'; // @main-orange
 
 function djb2Hash(str?: string): number {
@@ -24,15 +24,17 @@ export function colorForName(name: string): string {
   return elementColor[hashNumber % elementColor.length];
 }
 
-export function highlightColorForType(type: 'section' | 'element'): string {
-  // return highlightColorForSection;
+export function highlightColorForType(type: 'searchArea' | 'element'): string {
+  if (type === 'searchArea') {
+    return highlightColorForSearchArea;
+  }
   return highlightColorForElement;
 }
 
 export function globalThemeConfig(): ThemeConfig {
   return {
     token: {
-      colorPrimary: '#06b1ab',
+      colorPrimary: '#2B83FF',
     },
     components: {
       Layout: {

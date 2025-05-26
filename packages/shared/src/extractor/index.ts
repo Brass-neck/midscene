@@ -1,10 +1,11 @@
-import type { NodeType } from '../constants';
+import type { NodeType } from '../constants/index';
 
 export interface ElementInfo {
   id: string;
   indexId: number;
   nodeHashId: string;
   locator: string;
+  xpaths?: string[];
   attributes: {
     nodeType: NodeType;
     [key: string]: string;
@@ -24,8 +25,16 @@ export { descriptionOfTree, traverseTree, treeToList } from './tree';
 
 export { extractTextWithPosition as webExtractTextWithPosition } from './web-extractor';
 
-export { extractTextWithPosition as clientExtractTextWithPosition } from './client-extractor';
-
 export { extractTreeNode as webExtractNodeTree } from './web-extractor';
 
 export { extractTreeNodeAsString as webExtractNodeTreeAsString } from './web-extractor';
+
+export { setNodeHashCacheListOnWindow, getNodeFromCacheList } from './util';
+
+export {
+  getXpathsById,
+  getNodeInfoByXpath,
+  getElementInfoByXpath,
+} from './locator';
+
+export { generateElementByPosition } from './dom-util';

@@ -1,36 +1,31 @@
-import assert from 'node:assert';
-import {
-  MIDSCENE_MODEL_NAME,
-  MIDSCENE_USE_QWEN_VL,
-  MIDSCENE_USE_VLM_UI_TARS,
-  getAIConfig,
-  getAIConfigInBoolean,
-} from '@/env';
 import type {
   DumpMeta,
   DumpSubscriber,
   InsightDump,
   PartialInsightDumpFromSDK,
 } from '@/types';
-import { getLogDir, getVersion, stringifyDumpData } from '@/utils';
+import { getVersion } from '@/utils';
+import {
+  MIDSCENE_MODEL_NAME,
+  getAIConfig,
+  uiTarsModelVersion,
+  vlLocateMode,
+} from '@midscene/shared/env';
 import { uuid } from '@midscene/shared/utils';
-const logContent: string[] = [];
-const logIdIndexMap: Record<string, number> = {};
 
 export function emitInsightDump(
   data: PartialInsightDumpFromSDK,
-  logId?: string,
   dumpSubscriber?: DumpSubscriber,
-): string {
-  const logDir = getLogDir();
-  assert(logDir, 'logDir should be set before writing dump file');
-
-  const id = logId || uuid();
+) {
   let modelDescription = '';
-  if (getAIConfigInBoolean(MIDSCENE_USE_VLM_UI_TARS)) {
-    modelDescription = 'vlm-ui-tars mode';
-  } else if (getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)) {
-    modelDescription = 'qwen-vl mode';
+
+  if (vlLocateMode()) {
+    const uiTarsModelVer = uiTarsModelVersion();
+    if (uiTarsModelVer) {
+      modelDescription = `UI-TARS=${uiTarsModelVer}`;
+    } else {
+      modelDescription = `${vlLocateMode()} mode`;
+    }
   }
 
   const baseData: DumpMeta = {
@@ -40,21 +35,10 @@ export function emitInsightDump(
     model_description: modelDescription,
   };
   const finalData: InsightDump = {
-    logId: id,
+    logId: uuid(),
     ...baseData,
     ...data,
   };
 
   dumpSubscriber?.(finalData);
-
-  const dataString = stringifyDumpData(finalData, 2);
-
-  if (typeof logIdIndexMap[id] === 'number') {
-    logContent[logIdIndexMap[id]] = dataString;
-  } else {
-    const length = logContent.push(dataString);
-    logIdIndexMap[id] = length - 1;
-  }
-
-  return id;
 }

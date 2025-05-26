@@ -38,7 +38,7 @@ jobs:
         cache: 'pnpm'
 
     - name: Cache Puppeteer
-      uses: actions/cache@v4.0.2
+      uses: actions/cache@v4
       with:
         path: ~/.cache/puppeteer
         key: ${{ runner.os }}-puppeteer-${{ hashFiles('**/package-lock.json') }}
@@ -61,4 +61,5 @@ jobs:
       with:
         if-no-files-found: error
         name: chrome_extension
-        path: ${{ github.workspace }}/packages/visualizer/dist/extension
+        path: ${{ github.workspace }}/apps/chrome-extension/extension_output
+        

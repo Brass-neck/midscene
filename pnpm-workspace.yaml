@@ -1,8 +1,3 @@
 packages:
-  - apps/site
-  - packages/cli
-  - packages/shared
-  - packages/core
-  - packages/visualizer
-  - packages/web-integration
-  - packages/evaluation
+  - apps/*
+  - packages/*

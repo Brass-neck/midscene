@@ -27,7 +27,8 @@ export default defineConfig({
   plugins: [moduleTools()],
   buildPreset: 'npm-library',
   buildConfig: {
-    format: 'cjs',
+    target: 'es2020',
+    buildType: 'bundle',
     input: {
       index: 'src/index.ts',
       'bridge-mode': 'src/bridge-mode/index.ts',
@@ -35,15 +36,16 @@ export default defineConfig({
       utils: 'src/common/utils.ts',
       'ui-utils': 'src/common/ui-utils.ts',
       puppeteer: 'src/puppeteer/index.ts',
+      'puppeteer-agent-launcher': 'src/puppeteer/agent-launcher.ts',
       playwright: 'src/playwright/index.ts',
       playground: 'src/playground/index.ts',
       'midscene-playground': 'src/playground/bin.ts',
-      appium: 'src/appium/index.ts',
+      'midscene-server': 'src/playground/server.ts',
       'playwright-report': './src/playwright/reporter/index.ts',
       'chrome-extension': 'src/chrome-extension/index.ts',
       yaml: 'src/yaml/index.ts',
+      agent: 'src/common/agent.ts',
     },
-    target: 'es2018',
     externals: [
       '@midscene/core',
       '@midscene/shared',
@@ -55,6 +57,5 @@ export default defineConfig({
       __VERSION__: version,
     },
     sourceMap: true,
-    // splitting: true,
   },
 });

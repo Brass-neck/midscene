@@ -2,8 +2,12 @@
 
 import type { NodeType } from '@midscene/shared/constants';
 import type { ChatCompletionMessageParam } from 'openai/resources';
-
-export * from './yaml.d';
+import type {
+  DetailedLocateParam,
+  MidsceneYamlFlowItem,
+  scrollParam,
+} from './yaml';
+export * from './yaml';
 
 export interface Point {
   left: number;
@@ -35,6 +39,8 @@ export abstract class BaseElement {
   abstract center: [number, number];
 
   abstract locator?: string;
+
+  abstract xpaths?: string[];
 }
 
 export interface ElementTreeNode<
@@ -63,6 +69,7 @@ export type AISingleElementResponseById = {
   id: string;
   reason?: string;
   text?: string;
+  xpaths?: string[];
 };
 
 export type AISingleElementResponseByPosition = {
@@ -76,12 +83,14 @@ export type AISingleElementResponseByPosition = {
 };
 
 export type AISingleElementResponse = AISingleElementResponseById;
-export interface AIElementIdResponse {
+export interface AIElementLocatorResponse {
   elements: {
     id: string;
     reason?: string;
     text?: string;
+    xpaths?: string[];
   }[];
+  bbox?: [number, number, number, number];
   errors?: string[];
 }
 
@@ -91,13 +100,18 @@ export interface AIElementCoordinatesResponse {
 }
 
 export type AIElementResponse =
-  | AIElementIdResponse
+  | AIElementLocatorResponse
   | AIElementCoordinatesResponse;
 
-export interface AISectionParseResponse<DataShape> {
+export interface AIDataExtractionResponse<DataShape> {
   data: DataShape;
-  sections?: LiteUISection[];
   errors?: string[];
+}
+
+export interface AISectionLocatorResponse {
+  bbox: [number, number, number, number];
+  references_bbox?: [number, number, number, number][];
+  error?: string;
 }
 
 export interface AIAssertionResponse {
@@ -111,8 +125,6 @@ export interface AIAssertionResponse {
 
 export abstract class UIContext<ElementType extends BaseElement = BaseElement> {
   abstract screenshotBase64: string;
-
-  abstract screenshotBase64WithElementMarker?: string;
 
   // @deprecated('use tree instead')
   abstract content: ElementType[];
@@ -133,10 +145,6 @@ export type CallAIFn = <T>(
 export interface InsightOptions {
   taskInfo?: Omit<InsightTaskInfo, 'durationMs'>;
   aiVendorFn?: CallAIFn;
-  generateElement?: (opts: {
-    content?: string;
-    rect: BaseElement['rect'];
-  }) => BaseElement;
 }
 
 // export interface UISection {
@@ -153,11 +161,31 @@ export type InsightAction = 'locate' | 'extract' | 'assert';
 
 export type InsightExtractParam = string | Record<string, string>;
 
+export type LocateResultElement = {
+  id: string;
+  indexId?: number;
+  center: [number, number];
+  rect: Rect;
+  xpaths: string[];
+  attributes: {
+    nodeType: NodeType;
+    [key: string]: string;
+  };
+};
+
+export interface LocateResult {
+  element: LocateResultElement | null;
+  rect?: Rect;
+}
+
 export interface InsightTaskInfo {
   durationMs: number;
   formatResponse?: string;
   rawResponse?: string;
   usage?: AIUsageInfo;
+  searchArea?: Rect;
+  searchAreaRawResponse?: string;
+  searchAreaUsage?: AIUsageInfo;
 }
 
 export interface DumpMeta {
@@ -175,21 +203,20 @@ export interface ReportDumpWithAttributes {
 export interface InsightDump extends DumpMeta {
   type: 'locate' | 'extract' | 'assert';
   logId: string;
-  context: UIContext;
   userQuery: {
     element?: string;
     dataDemand?: InsightExtractParam;
-    sections?: Record<string, string>;
     assertion?: string;
-  }; // ?
-  quickAnswer?: Partial<AISingleElementResponse> | null;
-  matchedSection: [];
+  };
   matchedElement: BaseElement[];
+  matchedRect?: Rect;
+  deepThink?: boolean;
   data: any;
   assertionPass?: boolean;
   assertionThought?: string;
   taskInfo: InsightTaskInfo;
   error?: string;
+  output?: any;
 }
 
 export type PartialInsightDumpFromSDK = Omit<
@@ -233,15 +260,9 @@ export interface AgentAssertOpt {
  *
  */
 
-export interface PlanningLocateParam {
+export interface PlanningLocateParam extends DetailedLocateParam {
   id?: string;
-  position?: {
-    x: number;
-    y: number;
-  };
   bbox?: [number, number, number, number];
-  bbox_2d?: [number, number, number, number];
-  prompt: string;
 }
 
 export interface PlanningAction<ParamType = any> {
@@ -259,9 +280,13 @@ export interface PlanningAction<ParamType = any> {
     | 'Assert'
     | 'AssertWithoutThrow'
     | 'Sleep'
-    | 'Finished';
+    | 'Finished'
+    | 'AndroidBackButton'
+    | 'AndroidHomeButton'
+    | 'AndroidRecentAppsButton';
+
   param: ParamType;
-  locate: PlanningLocateParam | null;
+  locate?: PlanningLocateParam | null;
 }
 
 export interface PlanningAIResponse {
@@ -273,6 +298,8 @@ export interface PlanningAIResponse {
   error?: string;
   usage?: AIUsageInfo;
   rawResponse?: string;
+  yamlFlow?: MidsceneYamlFlowItem[];
+  yamlString?: string;
 }
 
 // export interface PlanningFurtherPlan {
@@ -286,11 +313,8 @@ export type PlanningActionParamHover = null;
 export interface PlanningActionParamInputOrKeyPress {
   value: string;
 }
-export interface PlanningActionParamScroll {
-  direction: 'down' | 'up' | 'right' | 'left';
-  scrollType: 'once' | 'untilBottom' | 'untilTop' | 'untilRight' | 'untilLeft';
-  distance: null | number;
-}
+
+export type PlanningActionParamScroll = scrollParam;
 
 export interface PlanningActionParamAssert {
   assertion: string;
@@ -304,10 +328,9 @@ export interface PlanningActionParamError {
   thought: string;
 }
 
-export type PlanningActionParamWaitFor = ExecutionTaskProgressOptions &
-  AgentWaitForOpt & {
-    assertion: string;
-  };
+export type PlanningActionParamWaitFor = AgentWaitForOpt & {
+  assertion: string;
+};
 /**
  * misc
  */
@@ -345,7 +368,7 @@ export type ExecutionTaskType = 'Planning' | 'Insight' | 'Action' | 'Assertion';
 
 export interface ExecutorContext {
   task: ExecutionTask;
-  element?: BaseElement | null;
+  element?: LocateResultElement | null;
 }
 
 export interface TaskCacheInfo {
@@ -362,8 +385,7 @@ export interface ExecutionTaskApply<
   subType?: string;
   param?: TaskParam;
   thought?: string;
-  locate: PlanningLocateParam | null;
-  quickAnswer?: AISingleElementResponse | null;
+  locate?: PlanningLocateParam | null;
   pageContext?: UIContext;
   executor: (
     param: TaskParam,
@@ -420,7 +442,7 @@ task - insight-locate
 export type ExecutionTaskInsightLocateParam = PlanningLocateParam;
 
 export interface ExecutionTaskInsightLocateOutput {
-  element: BaseElement | null;
+  element: LocateResultElement | null;
 }
 
 export interface ExecutionTaskInsightDumpLog {
@@ -510,3 +532,10 @@ export interface GroupedActionDump {
   groupDescription?: string;
   executions: ExecutionDump[];
 }
+
+export type PageType =
+  | 'puppeteer'
+  | 'playwright'
+  | 'static'
+  | 'chrome-extension-proxy'
+  | 'android';

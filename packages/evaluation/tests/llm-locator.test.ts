@@ -1,16 +1,16 @@
 import { writeFileSync } from 'node:fs';
-import {
-  AiInspectElement,
+import Insight, {
+  type Rect,
   MIDSCENE_MODEL_NAME,
   getAIConfig,
 } from '@midscene/core';
-import { MIDSCENE_USE_QWEN_VL, getAIConfigInBoolean } from '@midscene/core/env';
 import { sleep } from '@midscene/core/utils';
+import { vlLocateMode } from '@midscene/shared/env';
 import { saveBase64Image } from '@midscene/shared/img';
 import dotenv from 'dotenv';
-import { afterAll, expect, test } from 'vitest';
-import { TestResultCollector } from './test-analyzer';
-import { annotatePoints, buildContext, getCases } from './util';
+import { afterEach, expect, test } from 'vitest';
+import { TestResultCollector } from '../src/test-analyzer';
+import { annotateRects, buildContext, getCases } from './util';
 
 dotenv.config({
   debug: true,
@@ -27,21 +27,23 @@ const testSources = [
   'aweme-play',
 ];
 
-const positionModeTag = getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)
-  ? 'by_coordinates'
-  : 'by_element';
+const positionModeTag = vlLocateMode() ? 'by_coordinates' : 'by_element';
 const resultCollector = new TestResultCollector(
   positionModeTag,
   getAIConfig(MIDSCENE_MODEL_NAME) || 'unspecified',
 );
 
 let failCaseThreshold = 0;
-if (process.env.CI && !getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)) {
+if (process.env.CI && !vlLocateMode()) {
   failCaseThreshold = 3;
 }
 
-afterAll(async () => {
-  await resultCollector.analyze(failCaseThreshold);
+if (process.env.MIDSCENE_EVALUATION_EXPECT_VL) {
+  expect(vlLocateMode()).toBeTruthy();
+}
+
+afterEach(async () => {
+  await resultCollector.printSummary();
 });
 
 testSources.forEach((source) => {
@@ -55,50 +57,54 @@ testSources.forEach((source) => {
 
       const annotations: Array<{
         indexId: number;
-        points: [number, number, number, number];
+        rect: Rect;
       }> = [];
       for (const [index, testCase] of cases.testCases.entries()) {
         const context = await buildContext(source);
 
         const prompt = testCase.prompt;
         const startTime = Date.now();
-        const result = await AiInspectElement({
-          context,
-          targetElementDescription: prompt,
+
+        const insight = new Insight(context);
+
+        const result = await insight.locate({
+          prompt,
+          deepThink: testCase.deepThink,
         });
+        const { element, rect } = result;
 
         if (process.env.UPDATE_ANSWER_DATA) {
-          const { elementById } = result;
+          // const { elementById } = context;
 
-          if (result.rawResponse.bbox) {
+          if (rect) {
             const indexId = index + 1;
-            testCase.response_bbox = result.rawResponse.bbox;
+            testCase.response_rect = rect;
             testCase.annotation_index_id = indexId;
-            // biome-ignore lint/performance/noDelete: <explanation>
-            delete (testCase as any).response_coordinates;
             annotations.push({
               indexId,
-              points: result.rawResponse.bbox,
+              rect,
             });
-          } else if (result.parseResult.elements.length > 0) {
-            const element = elementById(result.parseResult.elements[0].id);
-            expect(element).toBeTruthy();
 
-            testCase.response = [
-              {
-                id: element!.id,
-                indexId: element!.indexId || -1,
-              },
-            ];
+            // // biome-ignore lint/performance/noDelete: <explanation>
+            // delete (testCase as any).response_bbox;
+            // // biome-ignore lint/performance/noDelete: <explanation>
+            // delete (testCase as any).response;
+          }
+
+          if (element) {
+            testCase.response_element = {
+              id: element.id,
+              indexId: element.indexId,
+            };
           }
 
           // write testCase to file
           writeFileSync(aiDataPath, JSON.stringify(cases, null, 2));
         }
         if (annotations.length > 0) {
-          const markedImage = await annotatePoints(
+          const markedImage = await annotateRects(
             context.screenshotBase64,
-            annotations,
+            annotations.map((item) => item.rect),
           );
           await saveBase64Image({
             base64Data: markedImage,
@@ -114,7 +120,7 @@ testSources.forEach((source) => {
         );
       }
 
-      await resultCollector.analyze(failCaseThreshold);
+      await resultCollector.analyze(source, failCaseThreshold);
       await sleep(3 * 1000);
     },
     360 * 1000,

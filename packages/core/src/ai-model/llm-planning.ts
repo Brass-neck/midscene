@@ -1,12 +1,14 @@
-import assert from 'node:assert';
-import { MIDSCENE_USE_QWEN_VL, getAIConfigInBoolean } from '@/env';
-import type { PlanningAIResponse, UIContext } from '@/types';
-import { paddingToMatchBlock } from '@midscene/shared/img';
+import type { PageType, PlanningAIResponse, UIContext } from '@/types';
+import { vlLocateMode } from '@midscene/shared/env';
+import { paddingToMatchBlockByBase64 } from '@midscene/shared/img';
+import { assert } from '@midscene/shared/utils';
 import {
   AIActionType,
   type AIArgs,
+  buildYamlFlowFromPlans,
   callAiFn,
-  fillLocateParam,
+  fillBboxParam,
+  markupImageForLLM,
   warnGPT4oSizeLimit,
 } from './common';
 import {
@@ -19,28 +21,43 @@ import { describeUserPage } from './prompt/util';
 export async function plan(
   userInstruction: string,
   opts: {
-    log?: string;
     context: UIContext;
+    pageType: PageType;
     callAI?: typeof callAiFn<PlanningAIResponse>;
+    log?: string;
+    actionContext?: string;
   },
 ): Promise<PlanningAIResponse> {
   const { callAI, context } = opts || {};
-  const { screenshotBase64, screenshotBase64WithElementMarker, size } = context;
-  const { description: pageDescription } = await describeUserPage(context);
+  const { screenshotBase64, size } = context;
+  const { description: pageDescription, elementById } =
+    await describeUserPage(context);
 
-  const systemPrompt = await systemPromptToTaskPlanning();
+  const systemPrompt = await systemPromptToTaskPlanning({
+    pageType: opts.pageType,
+    vlMode: vlLocateMode(),
+  });
   const taskBackgroundContextText = generateTaskBackgroundContext(
     userInstruction,
     opts.log,
+    opts.actionContext,
   );
-  const userInstructionPrompt = await automationUserPrompt().format({
+  const userInstructionPrompt = await automationUserPrompt(
+    vlLocateMode(),
+  ).format({
     pageDescription,
     taskBackgroundContext: taskBackgroundContextText,
   });
 
-  let imagePayload = screenshotBase64WithElementMarker || screenshotBase64;
-  if (getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)) {
-    imagePayload = await paddingToMatchBlock(imagePayload);
+  let imagePayload = screenshotBase64;
+  if (vlLocateMode() === 'qwen-vl') {
+    imagePayload = await paddingToMatchBlockByBase64(imagePayload);
+  } else if (!vlLocateMode()) {
+    imagePayload = await markupImageForLLM(
+      screenshotBase64,
+      context.tree,
+      context.size,
+    );
   }
 
   warnGPT4oSizeLimit(size);
@@ -77,23 +94,52 @@ export async function plan(
     actions,
     rawResponse,
     usage,
+    yamlFlow: buildYamlFlowFromPlans(actions, planFromAI.sleep),
   };
 
-  if (getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)) {
+  assert(planFromAI, "can't get plans from AI");
+
+  if (vlLocateMode()) {
     actions.forEach((action) => {
       if (action.locate) {
-        action.locate = fillLocateParam(action.locate);
+        try {
+          action.locate = fillBboxParam(action.locate, size.width, size.height);
+        } catch (e) {
+          throw new Error(
+            `Failed to fill locate param: ${planFromAI.error} (${
+              e instanceof Error ? e.message : 'unknown error'
+            })`,
+            {
+              cause: e,
+            },
+          );
+        }
+      }
+    });
+    // in Qwen-VL, error means error. In GPT-4o, error may mean more actions are needed.
+    assert(!planFromAI.error, `Failed to plan actions: ${planFromAI.error}`);
+  } else {
+    actions.forEach((action) => {
+      if (action.locate?.id) {
+        // The model may return indexId, need to perform a query correction to avoid exceptions
+        const element = elementById(action.locate.id);
+        if (element) {
+          action.locate.id = element.id;
+        }
       }
     });
   }
 
-  assert(planFromAI, "can't get plans from AI");
-  assert(
-    actions.length > 0 ||
-      !returnValue.more_actions_needed_by_instruction ||
-      returnValue.sleep,
-    `Failed to plan actions: ${planFromAI.error || '(no error details)'}`,
-  );
+  if (
+    actions.length === 0 &&
+    returnValue.more_actions_needed_by_instruction &&
+    !returnValue.sleep
+  ) {
+    console.warn(
+      'No actions planned for the prompt, but model said more actions are needed:',
+      userInstruction,
+    );
+  }
 
   return returnValue;
 }

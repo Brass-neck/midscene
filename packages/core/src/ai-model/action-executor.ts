@@ -1,5 +1,3 @@
-import assert from 'node:assert';
-import { MIDSCENE_MODEL_NAME, getAIConfig } from '@/env';
 import type {
   ExecutionDump,
   ExecutionTask,
@@ -10,6 +8,8 @@ import type {
   ExecutorContext,
 } from '@/types';
 import { getVersion } from '@/utils';
+import { MIDSCENE_MODEL_NAME, getAIConfig } from '@midscene/shared/env';
+import { assert } from '@midscene/shared/utils';
 
 export class Executor {
   name: string;
@@ -119,7 +119,10 @@ export class Executor {
           assert(
             task.subType === 'Locate' ||
               task.subType === 'Query' ||
-              task.subType === 'Assert',
+              task.subType === 'Assert' ||
+              task.subType === 'Boolean' ||
+              task.subType === 'Number' ||
+              task.subType === 'String',
             `unsupported insight subType: ${task.subType}`,
           );
           returnValue = await task.executor(param, executorContext);

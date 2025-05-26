@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { PlanningAIResponse } from '@midscene/core';
-import { MATCH_BY_POSITION, getAIConfigInBoolean } from '@midscene/core/env';
+import type { PlanningAIResponse, Rect } from '@midscene/core';
+import { NodeType } from '@midscene/shared/constants';
+import { vlLocateMode } from '@midscene/shared/env';
 import {
   base64Encoded,
   compositeElementInfoImg,
@@ -13,12 +14,14 @@ export const repeatTime = 1;
 
 export type TestCase = {
   prompt: string;
+  deepThink?: boolean;
   log?: string;
-  response: Array<{ id: string; indexId: number }>;
-  response_bbox?: [number, number, number, number];
+  response_element?: { id: string; indexId?: number };
+  response_rect?: Rect;
   response_planning?: PlanningAIResponse;
   expected?: boolean;
   annotation_index_id?: number;
+  action_context?: string;
 };
 
 export type InspectAiTestCase = {
@@ -175,13 +178,13 @@ export function writeFileSyncWithDir(
   writeFileSync(filePath, content, options);
 }
 
-export async function getCases(
+export function getCases(
   pageName: string,
   type = 'inspect',
-): Promise<{
+): {
   path: string;
   content: InspectAiTestCase;
-}> {
+} {
   const pageDataPath = path.join(
     __dirname,
     `../page-cases/${type}/${pageName}.json`,
@@ -238,32 +241,30 @@ export async function buildContext(pageName: string) {
   };
 
   const context = await parseContextFromWebPage(fakePage as any, {
-    ignoreMarker: getAIConfigInBoolean(MATCH_BY_POSITION),
+    ignoreMarker: !!vlLocateMode(),
   });
   return context;
 }
 
-export async function annotatePoints(
+export async function annotateRects(
   imgBase64: string,
-  points: Array<{
-    indexId: number;
-    points: [number, number, number, number];
-  }>,
+  rects: Rect[],
+  prompt?: string,
 ) {
   const markedImage = await compositeElementInfoImg({
     inputImgBase64: imgBase64,
-    elementsPositionInfo: points.map((item, index) => {
+    elementsPositionInfo: rects.map((rect, index) => {
       return {
-        rect: {
-          left: item.points[0],
-          top: item.points[1],
-          width: item.points[2] - item.points[0],
-          height: item.points[3] - item.points[1],
-        },
-        indexId: item.indexId,
+        id: `rect-${index}`,
+        rect,
+        indexId: index + 1,
+        attributes: { nodeType: NodeType.CONTAINER },
+        content: '',
+        center: [rect.left + rect.width / 2, rect.top + rect.height / 2],
       };
     }),
     annotationPadding: 0,
+    prompt,
   });
   return markedImage;
 }

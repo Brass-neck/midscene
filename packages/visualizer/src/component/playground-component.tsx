@@ -29,15 +29,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import Blackboard from './blackboard';
 import { iconForStatus } from './misc';
-import Player from './player';
+import {Player} from './player';
 import DemoData from './playground-demo-ui-context.json';
 import type { ReplayScriptsInfo } from './replay-scripts';
 import { allScriptsFromDump } from './replay-scripts';
 import './playground-component.less';
-import Logo from './logo';
-import { serverBase, useServerValid } from './open-in-playground';
+import {Logo} from './logo';
 
-import { overrideAIConfig } from '@midscene/core/env';
+// import { serverBase, useServerValid } from './open-in-playground';
+import {  useServerValid } from './playground/useServerValid';
+const serverBase = 'http://localhost:5800';
+
+import { overrideAIConfig } from '@midscene/shared/env';
 import {
   ERROR_CODE_NOT_IMPLEMENTED_AS_DESIGNED,
   StaticPage,
@@ -46,7 +49,8 @@ import {
 import type { WebUIContext } from '@midscene/web/utils';
 import type { MenuProps } from 'antd';
 import { EnvConfig } from './env-config';
-import { type HistoryItem, useChromeTabInfo, useEnvConfig } from './store';
+import {  useEnvConfig } from './store/store';
+import { type HistoryItem } from './store/history';
 
 import {
   ChromeExtensionProxyPage,
@@ -56,6 +60,7 @@ import { buildYaml } from '@midscene/web/yaml';
 
 import yaml from 'js-yaml';
 // import ButtonGroup from 'antd/es/button/button-group';
+
 interface PlaygroundResult {
   result: any;
   dump: GroupedActionDump | null;
@@ -216,7 +221,7 @@ export function Playground({
   const [curStep, setCurStep] = useState(0);
   const [result, setResult] = useState<(PlaygroundResult | null)[]>([]);
   const [verticalMode, setVerticalMode] = useState(false);
-  const { tabUrl } = useChromeTabInfo();
+  // const { tabUrl } = useChromeTabInfo();
   const [form] = Form.useForm();
   const {
     config,
@@ -790,49 +795,49 @@ export function Playground({
     [],
   );
 
-  async function copyCode(format: 'js' | 'yaml') {
-    try {
-      const stepContent = [];
-      const fullValue = form.getFieldsValue();
-      for (let i = 0; i < stepCount; i++) {
-        const type = fullValue[`type-${i}`];
-        const prompt = fullValue[`prompt-${i}`];
-        if (!prompt) {
-          continue;
-        }
-        if (format === 'yaml') {
-          stepContent.push({ [type]: prompt });
-        } else if (format === 'js') {
-          stepContent.push(`await ${type}('${prompt}');`);
-        }
-      }
-      if (stepContent.length) {
-        let text = '';
-        if (format === 'yaml') {
-          text = buildYaml(
-            {
-              url: tabUrl || '',
-            },
-            [
-              {
-                name: 'aiAction',
-                flow: stepContent as { [type: string]: string }[],
-              },
-            ],
-          );
-        } else if (format === 'js') {
-          text = stepContent.join('\n');
-        }
-        await navigator.clipboard.writeText(text);
-        message.success('Copy success');
-      } else {
-        message.info('No code to copy');
-      }
-    } catch (error) {
-      message.success('Copy failed');
-      console.error('Copy failed:', error);
-    }
-  }
+  // async function copyCode(format: 'js' | 'yaml') {
+  //   try {
+  //     const stepContent = [];
+  //     const fullValue = form.getFieldsValue();
+  //     for (let i = 0; i < stepCount; i++) {
+  //       const type = fullValue[`type-${i}`];
+  //       const prompt = fullValue[`prompt-${i}`];
+  //       if (!prompt) {
+  //         continue;
+  //       }
+  //       if (format === 'yaml') {
+  //         stepContent.push({ [type]: prompt });
+  //       } else if (format === 'js') {
+  //         stepContent.push(`await ${type}('${prompt}');`);
+  //       }
+  //     }
+  //     if (stepContent.length) {
+  //       let text = '';
+  //       if (format === 'yaml') {
+  //         text = buildYaml(
+  //           {
+  //             url: tabUrl || '',
+  //           },
+  //           [
+  //             {
+  //               name: 'aiAction',
+  //               flow: stepContent as { [type: string]: string }[],
+  //             },
+  //           ],
+  //         );
+  //       } else if (format === 'js') {
+  //         text = stepContent.join('\n');
+  //       }
+  //       await navigator.clipboard.writeText(text);
+  //       message.success('Copy success');
+  //     } else {
+  //       message.info('No code to copy');
+  //     }
+  //   } catch (error) {
+  //     message.success('Copy failed');
+  //     console.error('Copy failed:', error);
+  //   }
+  // }
 
   // const [hoveringSettings, setHoveringSettings] = useState(false);
   const formSection = (

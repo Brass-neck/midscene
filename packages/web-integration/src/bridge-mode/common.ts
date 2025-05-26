@@ -11,8 +11,12 @@ export enum BridgeEvent {
   Refused = 'bridge-refused',
   ConnectNewTabWithUrl = 'connectNewTabWithUrl',
   ConnectCurrentTab = 'connectCurrentTab',
+  GetBrowserTabList = 'getBrowserTabList',
   SetDestroyOptions = 'setDestroyOptions',
+  SetActiveTabId = 'setActiveTabId',
 }
+
+export const BridgeSignalKill = 'MIDSCENE_BRIDGE_SIGNAL_KILL';
 
 export interface BridgeConnectTabOptions {
   /**

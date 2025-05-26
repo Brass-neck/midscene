@@ -1,5 +1,4 @@
 import path from 'node:path';
-//@ts-ignore
 import dotenv from 'dotenv';
 import { defineConfig } from 'vitest/config';
 
@@ -8,6 +7,7 @@ import { defineConfig } from 'vitest/config';
  * https://github.com/motdotla/dotenv
  */
 dotenv.config({
+  path: path.join(__dirname, '../../.env'),
   override: true,
   debug: true,
 });

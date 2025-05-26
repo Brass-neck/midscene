@@ -1,6 +1,10 @@
-import { AiInspectElement } from '@/ai-model';
-import { getContextFromFixture } from '@/evaluation';
-import { expect, test } from 'vitest';
+import { AiLocateElement, AiLocateSection } from '@/ai-model';
+import { getContextFromFixture } from 'tests/evaluation';
+import { expect, test, vi } from 'vitest';
+
+vi.setConfig({
+  testTimeout: 60 * 1000,
+});
 
 test(
   'basic inspect',
@@ -8,7 +12,7 @@ test(
     const { context } = await getContextFromFixture('todo');
 
     const startTime = Date.now();
-    const { parseResult } = await AiInspectElement({
+    const { parseResult } = await AiLocateElement({
       context,
       targetElementDescription: 'input 输入框',
     });
@@ -22,18 +26,22 @@ test(
   },
 );
 
+test('locate section', async () => {
+  const { context } = await getContextFromFixture('todo');
+  const { rect } = await AiLocateSection({
+    context,
+    sectionDescription: '搜索框',
+  });
+  expect(rect).toBeDefined();
+});
+
 test('use quick answer', async () => {
   const { context } = await getContextFromFixture('todo');
 
   const startTime = Date.now();
-  const { parseResult } = await AiInspectElement({
+  const { parseResult } = await AiLocateElement({
     context,
     targetElementDescription: 'never mind',
-    quickAnswer: {
-      id: context.content[0].id,
-      reason: 'never mind',
-      text: 'never mind',
-    },
   });
   console.log('parseResult', parseResult);
   const endTime = Date.now();

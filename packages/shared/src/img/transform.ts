@@ -1,7 +1,11 @@
 import assert from 'node:assert';
 import { Buffer } from 'node:buffer';
-import getJimp from './get-jimp';
 
+import getDebug from 'debug';
+import type Jimp from 'jimp';
+import type { Rect } from 'src/types';
+import getJimp from './get-jimp';
+const debugImg = getDebug('img');
 /**
 /**
  * Saves a Base64-encoded image to a file
@@ -15,6 +19,7 @@ export async function saveBase64Image(options: {
   base64Data: string;
   outputPath: string;
 }): Promise<void> {
+  debugImg(`saveBase64Image start: ${options.outputPath}`);
   const { base64Data, outputPath } = options;
   // Remove the base64 data prefix (if any)
   const base64Image = base64Data.split(';base64,').pop() || base64Data;
@@ -26,6 +31,7 @@ export async function saveBase64Image(options: {
   const Jimp = await getJimp();
   const image = await Jimp.read(imageBuffer);
   await image.writeAsync(outputPath);
+  debugImg(`saveBase64Image done: ${options.outputPath}`);
 }
 
 /**
@@ -35,10 +41,13 @@ export async function saveBase64Image(options: {
  */
 export async function transformImgPathToBase64(inputPath: string) {
   // Use Jimp to process images and generate base64 data
+  debugImg(`transformImgPathToBase64 start: ${inputPath}`);
   const Jimp = await getJimp();
   const image = await Jimp.read(inputPath);
   const buffer = await image.getBufferAsync(Jimp.MIME_JPEG);
-  return buffer.toString('base64');
+  const res = buffer.toString('base64');
+  debugImg(`transformImgPathToBase64 done: ${inputPath}`);
+  return res;
 }
 
 /**
@@ -63,6 +72,7 @@ export async function resizeImg(
     'newSize must be positive',
   );
 
+  debugImg(`resizeImg start, target size: ${newSize.width}x${newSize.height}`);
   const Jimp = await getJimp();
   const image = await Jimp.read(inputData);
   const { width, height } = image.bitmap;
@@ -75,9 +85,10 @@ export async function resizeImg(
     return inputData;
   }
 
-  image.resize(newSize.width, newSize.height, Jimp.RESIZE_NEAREST_NEIGHBOR);
+  image.resize(newSize.width, newSize.height, Jimp.RESIZE_BICUBIC);
   image.quality(90);
   const resizedBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+  debugImg(`resizeImg done, target size: ${newSize.width}x${newSize.height}`);
 
   return resizedBuffer;
 }
@@ -88,7 +99,10 @@ export async function bufferFromBase64(base64: string) {
   if (dataSplitted.length !== 2) {
     throw Error('Invalid base64 data');
   }
-  return Buffer.from(dataSplitted[1], 'base64');
+  debugImg(`bufferFromBase64 start: ${base64}`);
+  const res = Buffer.from(dataSplitted[1], 'base64');
+  debugImg(`bufferFromBase64 done: ${base64}`);
+  return res;
 }
 
 export async function resizeImgBase64(
@@ -98,6 +112,7 @@ export async function resizeImgBase64(
     height: number;
   },
 ): Promise<string> {
+  debugImg(`resizeImgBase64 start: ${inputBase64}`);
   const splitFlag = ';base64,';
   const dataSplitted = inputBase64.split(splitFlag);
   if (dataSplitted.length !== 2) {
@@ -107,7 +122,9 @@ export async function resizeImgBase64(
   const imageBuffer = Buffer.from(dataSplitted[1], 'base64');
   const buffer = await resizeImg(imageBuffer, newSize);
   const content = buffer.toString('base64');
-  return `${dataSplitted[0]}${splitFlag}${content}`;
+  const res = `${dataSplitted[0]}${splitFlag}${content}`;
+  debugImg(`resizeImgBase64 done: ${inputBase64}`);
+  return res;
 }
 
 /**
@@ -195,24 +212,60 @@ export function prependBase64Header(base64: string, mimeType = 'image/png') {
   return `data:${mimeType};base64,${base64}`;
 }
 
-export async function paddingToMatchBlock(imageBase64: string, blockSize = 28) {
+export async function jimpFromBase64(base64: string): Promise<Jimp> {
   const Jimp = await getJimp();
-  const imageBuffer = await bufferFromBase64(imageBase64);
-  const image = await Jimp.read(imageBuffer);
+  const imageBuffer = await bufferFromBase64(base64);
+  return Jimp.read(imageBuffer);
+}
+
+// https://help.aliyun.com/zh/model-studio/user-guide/vision/
+export async function paddingToMatchBlock(
+  image: Jimp,
+  blockSize = 28,
+): Promise<Jimp> {
+  debugImg('paddingToMatchBlock start');
   const { width, height } = image.bitmap;
 
   const targetWidth = Math.ceil(width / blockSize) * blockSize;
   const targetHeight = Math.ceil(height / blockSize) * blockSize;
 
   if (targetWidth === width && targetHeight === height) {
-    return imageBase64;
+    return image;
   }
 
+  const Jimp = await getJimp();
   const paddedImage = new Jimp(targetWidth, targetHeight, 0xffffffff);
 
   // Composite the original image onto the new canvas
   paddedImage.composite(image, 0, 0);
+  return paddedImage;
+}
 
-  const base64 = await paddedImage.getBase64Async(Jimp.MIME_JPEG);
-  return base64;
+export async function paddingToMatchBlockByBase64(
+  imageBase64: string,
+  blockSize = 28,
+): Promise<string> {
+  const jimpImage = await jimpFromBase64(imageBase64);
+  const paddedImage = await paddingToMatchBlock(jimpImage, blockSize);
+  return jimpToBase64(paddedImage);
+}
+export async function cropByRect(
+  imageBase64: string,
+  rect: Rect,
+  paddingImage: boolean,
+): Promise<string> {
+  const jimpImage = await jimpFromBase64(imageBase64);
+  const { left, top, width, height } = rect;
+  jimpImage.crop(left, top, width, height);
+
+  if (paddingImage) {
+    const paddedImage = await paddingToMatchBlock(jimpImage);
+    return jimpToBase64(paddedImage);
+  }
+  return jimpToBase64(jimpImage);
+}
+
+export async function jimpToBase64(image: Jimp): Promise<string> {
+  const Jimp = await getJimp();
+  return image.getBase64Async(Jimp.MIME_JPEG);
 }

@@ -1,15 +1,7 @@
-import assert from 'node:assert';
+import { assert } from '@midscene/shared/utils';
 import yaml from 'js-yaml';
 
 import type { MidsceneYamlScript } from '@midscene/core';
-import type {
-  MidsceneYamlFlowItem,
-  MidsceneYamlFlowItemAIAction,
-  MidsceneYamlFlowItemAIAssert,
-  MidsceneYamlFlowItemAIQuery,
-  MidsceneYamlFlowItemAIWaitFor,
-  MidsceneYamlFlowItemSleep,
-} from '@midscene/core';
 
 function interpolateEnvVars(content: string): string {
   return content.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
@@ -29,16 +21,38 @@ export function parseYamlScript(
   const interpolatedContent = interpolateEnvVars(content);
   const obj = yaml.load(interpolatedContent) as MidsceneYamlScript;
   const pathTip = filePath ? `, failed to load ${filePath}` : '';
+  const android =
+    typeof obj.android !== 'undefined'
+      ? Object.assign({}, obj.android || {})
+      : undefined;
+  const webConfig = obj.web || obj.target; // no need to handle null case, because web has required parameters url
+  const web =
+    typeof webConfig !== 'undefined'
+      ? Object.assign({}, webConfig || {})
+      : undefined;
+
   if (!ignoreCheckingTarget) {
+    // make sure at least one of target/web/android is provided
     assert(
-      obj.target,
-      `property "target" is required in yaml script${pathTip}`,
+      web || android,
+      `at least one of "target", "web", or "android" properties is required in yaml script${pathTip}`,
     );
+
+    // make sure only one of target/web/android is provided
     assert(
-      typeof obj.target === 'object',
-      `property "target" must be an object${pathTip}`,
+      (web && !android) || (!web && android),
+      `only one of "target", "web", or "android" properties is allowed in yaml script${pathTip}`,
     );
+
+    // make sure the config is valid
+    if (web || android) {
+      assert(
+        typeof web === 'object' || typeof android === 'object',
+        `property "target/web/android" must be an object${pathTip}`,
+      );
+    }
   }
+
   assert(obj.tasks, `property "tasks" is required in yaml script ${pathTip}`);
   assert(
     Array.isArray(obj.tasks),
@@ -46,49 +60,3 @@ export function parseYamlScript(
   );
   return obj;
 }
-
-export const flowItemBrief = (flowItem?: MidsceneYamlFlowItem) => {
-  if (!flowItem) {
-    return '';
-  }
-
-  const sliceText = (text?: string) => {
-    const lengthLimit = 60;
-    if (text && text.length > lengthLimit) {
-      return `${text.slice(0, lengthLimit)}...`;
-    }
-
-    return text || '';
-  };
-
-  if (
-    (flowItem as MidsceneYamlFlowItemAIAction).aiAction ||
-    (flowItem as MidsceneYamlFlowItemAIAction).ai
-  ) {
-    const lastTip = (
-      (flowItem as MidsceneYamlFlowItemAIAction).aiActionProgressTips || []
-    ).at(-1);
-    return `aiAction: ${sliceText(
-      lastTip ||
-        (flowItem as MidsceneYamlFlowItemAIAction).aiAction ||
-        (flowItem as MidsceneYamlFlowItemAIAction).ai,
-    )}`;
-  }
-  if ((flowItem as MidsceneYamlFlowItemAIAssert).aiAssert) {
-    return `aiAssert: ${sliceText(
-      (flowItem as MidsceneYamlFlowItemAIAssert).aiAssert,
-    )}`;
-  }
-  if ((flowItem as MidsceneYamlFlowItemAIQuery).aiQuery) {
-    return `aiQuery: ${sliceText((flowItem as MidsceneYamlFlowItemAIQuery).aiQuery)}`;
-  }
-  if ((flowItem as MidsceneYamlFlowItemAIWaitFor).aiWaitFor) {
-    return `aiWaitFor: ${sliceText(
-      (flowItem as MidsceneYamlFlowItemAIWaitFor).aiWaitFor,
-    )}`;
-  }
-  if ((flowItem as MidsceneYamlFlowItemSleep).sleep) {
-    return `sleep: ${(flowItem as MidsceneYamlFlowItemSleep).sleep}`;
-  }
-  return '';
-};

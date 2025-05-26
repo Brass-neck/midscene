@@ -10,15 +10,15 @@ exports[`executor > insight - basic run 1`] = `
       250,
       250,
     ],
-    "children": [],
-    "content": "",
     "id": "0",
+    "indexId": undefined,
     "rect": {
       "height": 100,
       "left": 200,
       "top": 200,
       "width": 100,
     },
+    "xpaths": [],
   },
 }
 `;

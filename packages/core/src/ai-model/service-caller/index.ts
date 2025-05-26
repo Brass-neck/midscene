@@ -1,15 +1,9 @@
-import assert from 'node:assert';
 import { AIResponseFormat, type AIUsageInfo } from '@/types';
 import { Anthropic } from '@anthropic-ai/sdk';
 import {
   DefaultAzureCredential,
   getBearerTokenProvider,
 } from '@azure/identity';
-import { ifInBrowser } from '@midscene/shared/utils';
-import dJSON from 'dirty-json';
-import OpenAI, { AzureOpenAI } from 'openai';
-import type { ChatCompletionMessageParam } from 'openai/resources';
-import { SocksProxyAgent } from 'socks-proxy-agent';
 import {
   ANTHROPIC_API_KEY,
   AZURE_OPENAI_API_VERSION,
@@ -23,6 +17,7 @@ import {
   MIDSCENE_DEBUG_AI_RESPONSE,
   MIDSCENE_LANGSMITH_DEBUG,
   MIDSCENE_MODEL_NAME,
+  MIDSCENE_OPENAI_HTTP_PROXY,
   MIDSCENE_OPENAI_INIT_CONFIG_JSON,
   MIDSCENE_OPENAI_SOCKS_PROXY,
   MIDSCENE_USE_ANTHROPIC_SDK,
@@ -36,7 +31,17 @@ import {
   getAIConfig,
   getAIConfigInBoolean,
   getAIConfigInJson,
-} from '../../env';
+  uiTarsModelVersion,
+  vlLocateMode,
+} from '@midscene/shared/env';
+import { enableDebug, getDebug } from '@midscene/shared/logger';
+import { assert } from '@midscene/shared/utils';
+import { ifInBrowser } from '@midscene/shared/utils';
+import dJSON from 'dirty-json';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import OpenAI, { AzureOpenAI } from 'openai';
+import type { ChatCompletionMessageParam } from 'openai/resources';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { AIActionType } from '../common';
 import { assertSchema } from '../prompt/assertion';
 import { locatorSchema } from '../prompt/llm-locator';
@@ -48,6 +53,42 @@ export function checkAIConfig() {
   if (getAIConfig(ANTHROPIC_API_KEY)) return true;
 
   return Boolean(getAIConfig(MIDSCENE_OPENAI_INIT_CONFIG_JSON));
+}
+
+// if debug config is initialized
+let debugConfigInitialized = false;
+
+function initDebugConfig() {
+  // if debug config is initialized, return
+  if (debugConfigInitialized) return;
+
+  const shouldPrintTiming = getAIConfigInBoolean(MIDSCENE_DEBUG_AI_PROFILE);
+  let debugConfig = '';
+  if (shouldPrintTiming) {
+    console.warn(
+      'MIDSCENE_DEBUG_AI_PROFILE is deprecated, use DEBUG=midscene:ai:profile instead',
+    );
+    debugConfig = 'ai:profile';
+  }
+  const shouldPrintAIResponse = getAIConfigInBoolean(
+    MIDSCENE_DEBUG_AI_RESPONSE,
+  );
+  if (shouldPrintAIResponse) {
+    console.warn(
+      'MIDSCENE_DEBUG_AI_RESPONSE is deprecated, use DEBUG=midscene:ai:response instead',
+    );
+    if (debugConfig) {
+      debugConfig = 'ai:*';
+    } else {
+      debugConfig = 'ai:call';
+    }
+  }
+  if (debugConfig) {
+    enableDebug(debugConfig);
+  }
+
+  // mark as initialized
+  debugConfigInitialized = true;
 }
 
 // default model
@@ -69,18 +110,26 @@ async function createChatClient({
   completion: OpenAI.Chat.Completions;
   style: 'openai' | 'anthropic';
 }> {
+  initDebugConfig();
   let openai: OpenAI | AzureOpenAI | undefined;
   const extraConfig = getAIConfigInJson(MIDSCENE_OPENAI_INIT_CONFIG_JSON);
 
   const socksProxy = getAIConfig(MIDSCENE_OPENAI_SOCKS_PROXY);
-  const socksAgent = socksProxy ? new SocksProxyAgent(socksProxy) : undefined;
+  const httpProxy = getAIConfig(MIDSCENE_OPENAI_HTTP_PROXY);
+
+  let proxyAgent = undefined;
+  if (httpProxy) {
+    proxyAgent = new HttpsProxyAgent(httpProxy);
+  } else if (socksProxy) {
+    proxyAgent = new SocksProxyAgent(socksProxy);
+  }
 
   if (getAIConfig(OPENAI_USE_AZURE)) {
     // this is deprecated
     openai = new AzureOpenAI({
       baseURL: getAIConfig(OPENAI_BASE_URL),
       apiKey: getAIConfig(OPENAI_API_KEY),
-      httpAgent: socksAgent,
+      httpAgent: proxyAgent,
       ...extraConfig,
       dangerouslyAllowBrowser: true,
     }) as OpenAI;
@@ -136,7 +185,7 @@ async function createChatClient({
     openai = new OpenAI({
       baseURL: getAIConfig(OPENAI_BASE_URL),
       apiKey: getAIConfig(OPENAI_API_KEY),
-      httpAgent: socksAgent,
+      httpAgent: proxyAgent,
       ...extraConfig,
       defaultHeaders: {
         ...(extraConfig?.defaultHeaders || {}),
@@ -146,7 +195,7 @@ async function createChatClient({
     });
   }
 
-  if (openai && getAIConfig(MIDSCENE_LANGSMITH_DEBUG)) {
+  if (openai && getAIConfigInBoolean(MIDSCENE_LANGSMITH_DEBUG)) {
     if (ifInBrowser) {
       throw new Error('langsmith is not supported in browser');
     }
@@ -168,6 +217,7 @@ async function createChatClient({
     assert(apiKey, 'ANTHROPIC_API_KEY is required');
     openai = new Anthropic({
       apiKey,
+      httpAgent: proxyAgent,
       dangerouslyAllowBrowser: true,
     }) as any;
   }
@@ -192,12 +242,11 @@ export async function call(
   const { completion, style } = await createChatClient({
     AIActionTypeValue,
   });
-  const shouldPrintTiming = getAIConfigInBoolean(MIDSCENE_DEBUG_AI_PROFILE);
-  const shouldPrintAIResponse = getAIConfigInBoolean(
-    MIDSCENE_DEBUG_AI_RESPONSE,
-  );
 
   const maxTokens = getAIConfig(OPENAI_MAX_TOKENS);
+  const debugCall = getDebug('ai:call');
+  const debugProfileStats = getDebug('ai:profile:stats');
+  const debugProfileDetail = getDebug('ai:profile:detail');
 
   const startTime = Date.now();
   const model = getModelName();
@@ -210,35 +259,45 @@ export async function call(
       typeof maxTokens === 'number'
         ? maxTokens
         : Number.parseInt(maxTokens || '2048', 10),
-    ...(getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL)
+    ...(getAIConfigInBoolean(MIDSCENE_USE_QWEN_VL) // qwen specific config
       ? {
           vl_high_resolution_images: true,
         }
       : {}),
   };
   if (style === 'openai') {
-    const result = await completion.create({
-      model,
-      messages,
-      response_format: responseFormat,
-      ...commonConfig,
-    } as any);
-    shouldPrintTiming &&
-      console.log(
-        'Midscene - AI call',
-        getAIConfig(MIDSCENE_USE_QWEN_VL) ? 'MIDSCENE_USE_QWEN_VL' : '',
+    debugCall(`sending request to ${model}`);
+    let result: Awaited<ReturnType<typeof completion.create>>;
+    try {
+      result = await completion.create({
         model,
-        result.usage,
-        `${Date.now() - startTime}ms`,
-        result._request_id || '',
+        messages,
+        response_format: responseFormat,
+        ...commonConfig,
+      } as any);
+    } catch (e: any) {
+      const newError = new Error(
+        `failed to call AI model service: ${e.message}. Trouble shooting: https://midscenejs.com/model-provider.html`,
+        {
+          cause: e,
+        },
       );
+      throw newError;
+    }
+
+    debugProfileStats(
+      `model, ${model}, mode, ${vlLocateMode() || 'default'}, ui-tars-version, ${uiTarsModelVersion()}, prompt-tokens, ${result.usage?.prompt_tokens || ''}, completion-tokens, ${result.usage?.completion_tokens || ''}, total-tokens, ${result.usage?.total_tokens || ''}, cost-ms, ${Date.now() - startTime}, requestId, ${result._request_id || ''}`,
+    );
+
+    debugProfileDetail(`model usage detail: ${JSON.stringify(result.usage)}`);
 
     assert(
       result.choices,
       `invalid response from LLM service: ${JSON.stringify(result)}`,
     );
     content = result.choices[0].message.content!;
-    shouldPrintAIResponse && console.log('Midscene - AI response', content);
+
+    debugCall(`response: ${content}`);
     assert(content, 'empty content');
     usage = result.usage;
     // console.log('headers', result.headers);
@@ -292,7 +351,7 @@ export async function callToGetJSONObject<T>(
 
   const model = getModelName();
 
-  if (model.includes('gpt-4o')) {
+  if (model.includes('gpt-4')) {
     switch (AIActionTypeValue) {
       case AIActionType.ASSERT:
         responseFormat = assertSchema;
@@ -348,10 +407,20 @@ export function extractJSONFromCodeBlock(response: string) {
   return response;
 }
 
+export function preprocessDoubaoBboxJson(input: string) {
+  if (input.includes('bbox')) {
+    // when its values like 940 445 969 490, replace all /\d+\s+\d+/g with /$1,$2/g
+    while (/\d+\s+\d+/.test(input)) {
+      input = input.replace(/(\d+)\s+(\d+)/g, '$1,$2');
+    }
+  }
+  return input;
+}
+
 export function safeParseJson(input: string) {
   const cleanJsonString = extractJSONFromCodeBlock(input);
   // match the point
-  if (cleanJsonString.match(/\((\d+),(\d+)\)/)) {
+  if (cleanJsonString?.match(/\((\d+),(\d+)\)/)) {
     return cleanJsonString
       .match(/\((\d+),(\d+)\)/)
       ?.slice(1)
@@ -362,8 +431,11 @@ export function safeParseJson(input: string) {
   } catch {}
   try {
     return dJSON.parse(cleanJsonString);
-  } catch (e) {
-    console.log('e:', e);
+  } catch (e) {}
+
+  if (vlLocateMode() === 'doubao-vision' || vlLocateMode() === 'vlm-ui-tars') {
+    const jsonString = preprocessDoubaoBboxJson(cleanJsonString);
+    return dJSON.parse(jsonString);
   }
   throw Error(`failed to parse json response: ${input}`);
 }

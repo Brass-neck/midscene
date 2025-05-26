@@ -47,7 +47,7 @@ export function getPlaygroundUrl(cacheContextId: string) {
 
 export async function activeTab(): Promise<chrome.tabs.Tab> {
   return new Promise((resolve, reject) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs?.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs?.[0]) {
         resolve(tabs[0]);
       } else {
@@ -67,12 +67,4 @@ export async function currentWindowId(): Promise<number> {
       }
     });
   });
-}
-
-export function getExtensionVersion() {
-  return chrome.runtime.getManifest().version;
-}
-
-export async function getTabInfo(tabId: number) {
-  return await chrome.tabs.get(tabId);
 }

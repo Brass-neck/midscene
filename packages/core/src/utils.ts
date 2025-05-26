@@ -1,58 +1,35 @@
-import assert from 'node:assert';
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { getRunningPkgInfo } from '@midscene/shared/fs';
-import { ifInBrowser, uuid } from '@midscene/shared/utils';
+import * as path from 'node:path';
+import { dirname } from 'node:path';
+import {
+  defaultRunDirName,
+  getMidsceneRunSubDir,
+  logDir,
+} from '@midscene/shared/common';
 import {
   MIDSCENE_DEBUG_MODE,
   MIDSCENE_OPENAI_INIT_CONFIG_JSON,
   getAIConfig,
   getAIConfigInJson,
-} from './env';
+} from '@midscene/shared/env';
+import { getRunningPkgInfo } from '@midscene/shared/fs';
+import { assert, getGlobalScope } from '@midscene/shared/utils';
+import { ifInBrowser, uuid } from '@midscene/shared/utils';
 import type { Rect, ReportDumpWithAttributes } from './types';
 
-let logDir = join(process.cwd(), './midscene_run/');
 let logEnvReady = false;
+
 export const groupedActionDumpFileExt = 'web-dump.json';
 
 export function getLogDir() {
   return logDir;
 }
 
-export function setLogDir(dir: string) {
-  logDir = dir;
-}
+const reportTpl = 'REPLACE_ME_WITH_REPORT_HTML';
 
-export function getLogDirByType(type: 'dump' | 'cache' | 'report' | 'tmp') {
-  const dir = join(getLogDir(), type);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  return dir;
-}
-
-let reportTpl: string | null = null;
 function getReportTpl() {
-  if (ifInBrowser) {
-    if (!reportTpl && (window as any).get_midscene_report_tpl) {
-      reportTpl = (window as any).get_midscene_report_tpl();
-    }
-    // assert(
-    //   reportTpl,
-    //   'reportTpl should be set before writing report in browser',
-    // );
-    return reportTpl;
-  }
-
-  if (!reportTpl) {
-    let reportPath = join(__dirname, '../../report/index.html');
-    if (!existsSync(reportPath)) {
-      reportPath = join(__dirname, '../report/index.html');
-    }
-    reportTpl = readFileSync(reportPath, 'utf-8');
-  }
   return reportTpl;
 }
 
@@ -67,44 +44,98 @@ export function replaceStringWithFirstAppearance(
 
 export function reportHTMLContent(
   dumpData: string | ReportDumpWithAttributes[],
+  reportPath?: string,
 ): string {
   const tpl = getReportTpl();
   if (!tpl) {
     console.warn('reportTpl is not set, will not write report');
     return '';
   }
-  let reportContent: string;
+
+  const dumpPlaceholder = '{{dump}}';
+
+  // verify the template contains the placeholder
+  if (!tpl.includes(dumpPlaceholder)) {
+    console.warn('Template does not contain {{dump}} placeholder');
+    return '';
+  }
+
+  // find the first placeholder position
+  const placeholderIndex = tpl.indexOf(dumpPlaceholder);
+
+  // split the template into two parts before and after the placeholder
+  const firstPart = tpl.substring(0, placeholderIndex);
+  const secondPart = tpl.substring(placeholderIndex + dumpPlaceholder.length);
+
+  // if reportPath is set, it means we are in write to file mode
+  const writeToFile = reportPath && !ifInBrowser;
+  let resultContent = '';
+
+  // helper function: decide to write to file or append to resultContent
+  const appendOrWrite = (content: string): void => {
+    if (writeToFile) {
+      writeFileSync(reportPath!, `${content}\n`, {
+        flag: 'a',
+      });
+    } else {
+      resultContent += `${content}\n`;
+    }
+  };
+
+  // if writeToFile is true, write the first part to file, otherwise set the first part to the initial value of resultContent
+  if (writeToFile) {
+    writeFileSync(reportPath!, firstPart, { flag: 'w' }); // use 'w' flag to overwrite the existing file
+  } else {
+    resultContent = firstPart;
+  }
+
+  // generate dump content
+  // handle empty data or undefined
   if (
     (Array.isArray(dumpData) && dumpData.length === 0) ||
     typeof dumpData === 'undefined'
   ) {
-    reportContent = replaceStringWithFirstAppearance(
-      tpl,
-      '{{dump}}',
-      `<script type="midscene_web_dump" type="application/json"></script>`,
-    );
-  } else if (typeof dumpData === 'string') {
-    reportContent = replaceStringWithFirstAppearance(
-      tpl,
-      '{{dump}}',
-      `<script type="midscene_web_dump" type="application/json">${dumpData}</script>`,
-    );
-  } else {
-    const dumps = dumpData.map(({ dumpString, attributes }) => {
+    const dumpContent =
+      '<script type="midscene_web_dump" type="application/json"></script>';
+    appendOrWrite(dumpContent);
+  }
+  // handle string type dumpData
+  else if (typeof dumpData === 'string') {
+    const dumpContent =
+      // biome-ignore lint/style/useTemplate: <explanation> do not use template string here, will cause bundle error
+      '<script type="midscene_web_dump" type="application/json">\n' +
+      dumpData +
+      '\n</script>';
+    appendOrWrite(dumpContent);
+  }
+  // handle array type dumpData
+  else {
+    // for array, handle each item
+    for (let i = 0; i < dumpData.length; i++) {
+      const { dumpString, attributes } = dumpData[i];
       const attributesArr = Object.keys(attributes || {}).map((key) => {
         return `${key}="${encodeURIComponent(attributes![key])}"`;
       });
-      return `<script type="midscene_web_dump" type="application/json" ${attributesArr.join(
-        ' ',
-      )}\n>${dumpString}\n</script>`;
-    });
-    reportContent = replaceStringWithFirstAppearance(
-      tpl,
-      '{{dump}}',
-      dumps.join('\n'),
-    );
+
+      const dumpContent =
+        // biome-ignore lint/style/useTemplate: <explanation> do not use template string here, will cause bundle error
+        '<script type="midscene_web_dump" type="application/json" ' +
+        attributesArr.join(' ') +
+        '>\n' +
+        dumpString +
+        '\n</script>';
+      appendOrWrite(dumpContent);
+    }
   }
-  return reportContent;
+
+  // add the second part
+  if (writeToFile) {
+    writeFileSync(reportPath!, secondPart, { flag: 'a' });
+    return reportPath!;
+  }
+
+  resultContent += secondPart;
+  return resultContent;
 }
 
 export function writeDumpReport(
@@ -116,19 +147,28 @@ export function writeDumpReport(
     return null;
   }
 
+  const __dirname = dirname(__filename);
   const midscenePkgInfo = getRunningPkgInfo(__dirname);
   if (!midscenePkgInfo) {
     console.warn('midscenePkgInfo not found, will not write report');
     return null;
   }
 
-  const reportPath = join(getLogDirByType('report'), `${fileName}.html`);
-  const reportContent = reportHTMLContent(dumpData);
-  if (!reportContent) {
-    console.warn('reportContent is empty, will not write report');
-    return null;
+  const reportPath = path.join(
+    getMidsceneRunSubDir('report'),
+    `${fileName}.html`,
+  );
+
+  reportHTMLContent(dumpData, reportPath);
+
+  if (process.env.MIDSCENE_DEBUG_LOG_JSON) {
+    writeFileSync(
+      `${reportPath}.json`,
+      typeof dumpData === 'string'
+        ? dumpData
+        : JSON.stringify(dumpData, null, 2),
+    );
   }
-  writeFileSync(reportPath, reportContent);
 
   return reportPath;
 }
@@ -144,39 +184,39 @@ export function writeLogFile(opts: {
     return '/mock/report.html';
   }
   const { fileName, fileExt, fileContent, type = 'dump' } = opts;
-  const targetDir = getLogDirByType(type);
+  const targetDir = getMidsceneRunSubDir(type);
   // Ensure directory exists
   if (!logEnvReady) {
     assert(targetDir, 'logDir should be set before writing dump file');
 
     // gitIgnore in the parent directory
-    const gitIgnorePath = join(targetDir, '../../.gitignore');
+    const gitIgnorePath = path.join(targetDir, '../../.gitignore');
+    const gitPath = path.join(targetDir, '../../.git');
     let gitIgnoreContent = '';
-    if (existsSync(gitIgnorePath)) {
-      gitIgnoreContent = readFileSync(gitIgnorePath, 'utf-8');
+
+    if (existsSync(gitPath)) {
+      // if the git path exists, we need to add the log folder to the git ignore file
+      if (existsSync(gitIgnorePath)) {
+        gitIgnoreContent = readFileSync(gitIgnorePath, 'utf-8');
+      }
+
+      // ignore the log folder
+      if (!gitIgnoreContent.includes(`${defaultRunDirName}/`)) {
+        writeFileSync(
+          gitIgnorePath,
+          `${gitIgnoreContent}\n# Midscene.js dump files\n${defaultRunDirName}/dump\n${defaultRunDirName}/report\n${defaultRunDirName}/tmp\n${defaultRunDirName}/log\n`,
+          'utf-8',
+        );
+      }
     }
 
-    // ignore the log folder
-    const logDirName = basename(logDir);
-    if (!gitIgnoreContent.includes(`${logDirName}/`)) {
-      writeFileSync(
-        gitIgnorePath,
-        `${gitIgnoreContent}\n# Midscene.js dump files\n${logDirName}/report\n${logDirName}/tmp\n`,
-        'utf-8',
-      );
-    }
     logEnvReady = true;
   }
 
-  const filePath = join(targetDir, `${fileName}.${fileExt}`);
+  const filePath = path.join(targetDir, `${fileName}.${fileExt}`);
 
   if (type !== 'dump') {
     // do not write dump file any more
-    const outputResourceDir = dirname(filePath);
-    if (!existsSync(outputResourceDir)) {
-      mkdirSync(outputResourceDir, { recursive: true });
-    }
-
     writeFileSync(filePath, fileContent);
   }
 
@@ -188,17 +228,18 @@ export function writeLogFile(opts: {
 }
 
 export function getTmpDir(): string | null {
-  if (ifInBrowser) {
+  try {
+    const runningPkgInfo = getRunningPkgInfo();
+    if (!runningPkgInfo) {
+      return null;
+    }
+    const { name } = runningPkgInfo;
+    const tmpPath = path.join(tmpdir(), name);
+    mkdirSync(tmpPath, { recursive: true });
+    return tmpPath;
+  } catch (e) {
     return null;
   }
-  const runningPkgInfo = getRunningPkgInfo();
-  if (!runningPkgInfo) {
-    return null;
-  }
-  const { name } = runningPkgInfo;
-  const path = join(tmpdir(), name);
-  mkdirSync(path, { recursive: true });
-  return path;
 }
 
 export function getTmpFile(fileExtWithoutDot: string): string | null {
@@ -207,7 +248,7 @@ export function getTmpFile(fileExtWithoutDot: string): string | null {
   }
   const tmpDir = getTmpDir();
   const filename = `${uuid()}.${fileExtWithoutDot}`;
-  return join(tmpDir!, filename);
+  return path.join(tmpDir!, filename);
 }
 
 export function overlapped(container: Rect, target: Rect) {
