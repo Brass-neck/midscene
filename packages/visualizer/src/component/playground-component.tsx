@@ -51,7 +51,7 @@ import type { WebUIContext } from '@midscene/web/utils';
 import type { MenuProps } from 'antd';
 import { EnvConfig } from './env-config';
 import {  useEnvConfig } from './store/store';
-import { type HistoryItem } from './store/history';
+import { type HistoryItem, useHistoryStore } from './store/history';
 
 import {
   ChromeExtensionProxyPage,
@@ -239,7 +239,9 @@ export function Playground({
   );
   const configAlreadySet = Object.keys(config || {}).length >= 1;
   const runResultRef = useRef<HTMLHeadingElement>(null);
-  const addHistory = useEnvConfig((state) => state.addHistory);
+  // const addHistory = useEnvConfig((state) => state.addHistory);
+  const addHistory = useHistoryStore((state) => state.addHistory);
+  
 
   // AI Node Num
   let AINodeNum = 0;
@@ -786,7 +788,8 @@ export function Playground({
     </div>
   );
 
-  const history = useEnvConfig((state) => state.history);
+  // const history = useEnvConfig((state) => state.history);
+  const history = useHistoryStore((state) => state.history);
   const lastHistory = history[0];
   const historyInitialValues = useMemo(
     () => ({

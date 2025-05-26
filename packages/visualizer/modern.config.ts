@@ -2,15 +2,16 @@ import path from 'node:path';
 import { defineConfig, moduleTools } from '@modern-js/module-tools';
 import { modulePluginNodePolyfill } from '@modern-js/plugin-module-node-polyfill';
 import { version } from './package.json';
-const externals = [
-  'playwright',
-  'bufferutil',
-  'utf-8-validate',
-  'antd',
-  '@ant-design/icons',
-  'react',
-  'react-dom',
-];
+// const externals = [
+//   'playwright',
+//   'bufferutil',
+//   'utf-8-validate',
+//   'antd',
+//   '@ant-design/icons',
+//   'react',
+//   'react-dom',
+// ];
+const externals = ['playwright', 'bufferutil', 'utf-8-validate'];
 
 const commonConfig = {
   asset: {
