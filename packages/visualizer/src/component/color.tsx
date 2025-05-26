@@ -34,7 +34,7 @@ export function highlightColorForType(type: 'searchArea' | 'element'): string {
 export function globalThemeConfig(): ThemeConfig {
   return {
     token: {
-      colorPrimary: '#2B83FF',
+      colorPrimary: '#188A80',
     },
     components: {
       Layout: {
