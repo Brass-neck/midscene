@@ -479,11 +479,10 @@ export function Playground({
       currentRunningIdRef.current = thisRunningId;
       interruptedFlagRef.current[thisRunningId] = false;
       // currentAgentRef.current.resetDump();
-      currentAgentRef.current.opts.onTaskStartTip = (tip: string) => {
+      currentAgentRef.current.onTaskStartTip = (tip: string) => {
         if (interruptedFlagRef.current[thisRunningId]) {
           return;
         }
-        console.log('CANARY【playground】onTaskStartTip', tip);
         setLoadingProgressText(tip);
       };
       if (serviceMode === 'Server') {
@@ -511,16 +510,16 @@ export function Playground({
           result.result = 'ok';
         } else if (value.type === 'aiYaml') {
           const res = await currentAgentRef.current?.runYaml(value.prompt);
-          result.result = res.result;
+          result.result = res?.result;
         } else if (value.type === 'aiScroll') {
           const res = await currentAgentRef.current?.aiScroll(value.prompt);
-          result.result = res.result;
+          result.result = res?.result;
         } else if (value.type === 'aiTap') {
           const res = await currentAgentRef.current?.aiTap(value.prompt);
-          result.result = res.result;
+          result.result = res?.result;
         } else if (value.type === 'aiHover') {
           const res = await currentAgentRef.current?.aiHover(value.prompt);
-          result.result = res.result;
+          result.result = res?.result;
         } else if (value.type === 'aiInput') {
           const res = await currentAgentRef.current?.aiInput(value.prompt);
           result.result = res.result;
@@ -528,10 +527,9 @@ export function Playground({
           const res = await currentAgentRef.current?.aiKeyboardPress(
             value.prompt,
           );
-          result.result = res.result;
+          result.result = res?.result;
         } else if (value.type === 'aiWaitFor') {
-          const res = await currentAgentRef.current?.aiWaitFor(value.prompt);
-          result.result = res.result;
+          await currentAgentRef.current?.aiWaitFor(value.prompt);
         }
       }
     } catch (e: any) {
@@ -1071,6 +1069,7 @@ export function Playground({
     resultWrapperClassName += ' result-wrapper-compact';
   }
 
+  console.log('bigResult', bigResult);
   const items = Object.keys(bigResult).map((key, index) => ({
     key: index,
     label: `节点：${key}`,
