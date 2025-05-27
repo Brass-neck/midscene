@@ -425,6 +425,18 @@ export function Playground({
         type = 'sleep';
       } else if (yamlFlowItem.aiScroll) {
         type = 'aiScroll';
+      } else if (yamlFlowItem.aiTap) {
+        type = 'aiTap';
+      } else if (yamlFlowItem.aiHover) {
+        type = 'aiHover';
+      } else if (yamlFlowItem.aiAction) {
+        type = 'aiAction';
+      } else if (yamlFlowItem.aiInput) {
+        type = 'aiInput';
+      } else if (yamlFlowItem.aiKeyboardPress) {
+        type = 'aiKeyboardPress';
+      } else if (yamlFlowItem.aiWaitFor) {
+        type = 'aiWaitFor';
       }
       _value[`type-${stepIndex}`] = type;
       _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
@@ -502,6 +514,23 @@ export function Playground({
           result.result = res.result;
         } else if (value.type === 'aiScroll') {
           const res = await currentAgentRef.current?.aiScroll(value.prompt);
+          result.result = res.result;
+        } else if (value.type === 'aiTap') {
+          const res = await currentAgentRef.current?.aiTap(value.prompt);
+          result.result = res.result;
+        } else if (value.type === 'aiHover') {
+          const res = await currentAgentRef.current?.aiHover(value.prompt);
+          result.result = res.result;
+        } else if (value.type === 'aiInput') {
+          const res = await currentAgentRef.current?.aiInput(value.prompt);
+          result.result = res.result;
+        } else if (value.type === 'aiKeyboardPress') {
+          const res = await currentAgentRef.current?.aiKeyboardPress(
+            value.prompt,
+          );
+          result.result = res.result;
+        } else if (value.type === 'aiWaitFor') {
+          const res = await currentAgentRef.current?.aiWaitFor(value.prompt);
           result.result = res.result;
         }
       }
