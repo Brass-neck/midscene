@@ -30,15 +30,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import Blackboard from './blackboard';
 import { iconForStatus } from './misc';
-import {Player} from './player';
+import { Player } from './player';
 import DemoData from './playground-demo-ui-context.json';
 import type { ReplayScriptsInfo } from './replay-scripts';
 import { allScriptsFromDump } from './replay-scripts';
 import './playground-component.less';
-import {Logo} from './logo';
+import { Logo } from './logo';
 
 // import { serverBase, useServerValid } from './open-in-playground';
-import {  useServerValid } from './playground/useServerValid';
+import { useServerValid } from './playground/useServerValid';
 const serverBase = 'http://localhost:5800';
 
 import { overrideAIConfig } from '@midscene/shared/env';
@@ -50,7 +50,7 @@ import {
 import type { WebUIContext } from '@midscene/web/utils';
 import type { MenuProps } from 'antd';
 import { EnvConfig } from './env-config';
-import {  useEnvConfig } from './store/store';
+import { useEnvConfig } from './store/store';
 import { type HistoryItem, useHistoryStore } from './store/history';
 
 import {
@@ -241,7 +241,6 @@ export function Playground({
   const runResultRef = useRef<HTMLHeadingElement>(null);
   // const addHistory = useEnvConfig((state) => state.addHistory);
   const addHistory = useHistoryStore((state) => state.addHistory);
-  
 
   // AI Node Num
   let AINodeNum = 0;
@@ -424,6 +423,8 @@ export function Playground({
         type = 'aiAssert';
       } else if (yamlFlowItem.sleep) {
         type = 'sleep';
+      } else if (yamlFlowItem.aiScroll) {
+        type = 'aiScroll';
       }
       _value[`type-${stepIndex}`] = type;
       _value[`prompt-${stepIndex}`] = yamlFlowItem[type] || '';
@@ -470,6 +471,7 @@ export function Playground({
         if (interruptedFlagRef.current[thisRunningId]) {
           return;
         }
+        console.log('CANARY【playground】onTaskStartTip', tip);
         setLoadingProgressText(tip);
       };
       if (serviceMode === 'Server') {
@@ -497,6 +499,9 @@ export function Playground({
           result.result = 'ok';
         } else if (value.type === 'aiYaml') {
           const res = await currentAgentRef.current?.runYaml(value.prompt);
+          result.result = res.result;
+        } else if (value.type === 'aiScroll') {
+          const res = await currentAgentRef.current?.aiScroll(value.prompt);
           result.result = res.result;
         }
       }
