@@ -580,12 +580,7 @@ export function Playground({
     });
 
     console.log('CANARY【playground】handleRun result', result);
-    if (
-      (value.type === 'ai' ||
-        value.type === 'aiAction' ||
-        value.type === 'aiYaml') &&
-      result?.dump
-    ) {
+    if (result?.dump) {
       const info = allScriptsFromDump(result.dump);
       setReplayScriptsInfo(info);
       setReplayCounter((c) => c + 1);
